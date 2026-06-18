@@ -1,4 +1,10 @@
-import type { ActivatedStepTool, OperationToolSet, ToolSource } from '@lobechat/context-engine';
+import type {
+  ActivatedStepSkill,
+  ActivatedStepTool,
+  OperationToolSet,
+  ToolExecutor,
+  ToolSource,
+} from '@lobechat/context-engine';
 import type {
   ChatToolPayload,
   SecurityBlacklistConfig,
@@ -12,6 +18,8 @@ import type { Cost, CostLimit, Usage } from './usage';
  * This is the "passport" that can be persisted and transferred.
  */
 export interface AgentState {
+  /** Cumulative record of skills activated at step level */
+  activatedStepSkills?: ActivatedStepSkill[];
   /** Cumulative record of tools activated at step level */
   activatedStepTools?: ActivatedStepTool[];
   /**
@@ -105,7 +113,14 @@ export interface AgentState {
    */
   securityBlacklist?: SecurityBlacklistConfig;
   // --- State Machine ---
-  status: 'idle' | 'running' | 'waiting_for_human' | 'done' | 'error' | 'interrupted';
+  status:
+    | 'idle'
+    | 'running'
+    | 'waiting_for_human'
+    | 'waiting_for_async_tool'
+    | 'done'
+    | 'error'
+    | 'interrupted';
 
   // --- Execution Tracking ---
   /**
@@ -115,6 +130,9 @@ export interface AgentState {
   stepCount: number;
 
   systemRole?: string;
+  /** Tool executor map for routing tool execution between server and client */
+  toolExecutorMap?: Record<string, ToolExecutor>;
+
   toolManifestMap: Record<string, any>;
 
   tools?: any[];
@@ -144,6 +162,12 @@ export interface ToolsCalling {
     name: string; // A JSON string of arguments
   };
   id: string;
+  /**
+   * Gemini 3.x thought signature, captured from `functionCall.thoughtSignature` in the
+   * streaming response. Must be round-tripped back in subsequent requests or Gemini will
+   * 400 with a misleading "ordering" error. Optional; only set for Gemini 3.x tool calls.
+   */
+  thoughtSignature?: string;
   type: 'function';
 }
 

@@ -1,11 +1,23 @@
 import {
+  LobeActivatorInspectors,
+  LobeActivatorManifest,
+} from '@lobechat/builtin-tool-activator/client';
+import {
   AgentBuilderInspectors,
   AgentBuilderManifest,
 } from '@lobechat/builtin-tool-agent-builder/client';
 import {
+  AgentDocumentsInspectors,
+  AgentDocumentsManifest,
+} from '@lobechat/builtin-tool-agent-documents/client';
+import {
   AgentManagementInspectors,
   AgentManagementManifest,
 } from '@lobechat/builtin-tool-agent-management/client';
+import {
+  ClaudeCodeIdentifier,
+  ClaudeCodeInspectors,
+} from '@lobechat/builtin-tool-claude-code/client';
 import {
   CloudSandboxIdentifier,
   CloudSandboxInspectors,
@@ -18,29 +30,46 @@ import {
   GroupManagementInspectors,
   GroupManagementManifest,
 } from '@lobechat/builtin-tool-group-management/client';
-import { GTDInspectors, GTDManifest } from '@lobechat/builtin-tool-gtd/client';
 import {
   KnowledgeBaseInspectors,
   KnowledgeBaseManifest,
 } from '@lobechat/builtin-tool-knowledge-base/client';
+import { LobeAgentInspectors, LobeAgentManifest } from '@lobechat/builtin-tool-lobe-agent/client';
+import {
+  LobeDeliveryCheckerInspectors,
+  LobeDeliveryCheckerManifest,
+} from '@lobechat/builtin-tool-lobe-delivery-checker/client';
 import {
   LocalSystemInspectors,
   LocalSystemManifest,
 } from '@lobechat/builtin-tool-local-system/client';
 import { MemoryInspectors, MemoryManifest } from '@lobechat/builtin-tool-memory/client';
-import { NotebookInspectors, NotebookManifest } from '@lobechat/builtin-tool-notebook/client';
+import { MessageInspectors, MessageManifest } from '@lobechat/builtin-tool-message/client';
 import { PageAgentInspectors, PageAgentManifest } from '@lobechat/builtin-tool-page-agent/client';
+import {
+  SelfFeedbackIntentInspectors,
+  selfFeedbackIntentManifest,
+} from '@lobechat/builtin-tool-self-iteration/client';
 import {
   SkillStoreInspectors,
   SkillStoreManifest,
 } from '@lobechat/builtin-tool-skill-store/client';
 import { SkillsInspectors, SkillsManifest } from '@lobechat/builtin-tool-skills/client';
-import { LobeToolsInspectors, LobeToolsManifest } from '@lobechat/builtin-tool-tools/client';
+import { TaskInspectors, TaskManifest } from '@lobechat/builtin-tool-task/client';
 import {
   WebBrowsingInspectors,
   WebBrowsingManifest,
 } from '@lobechat/builtin-tool-web-browsing/client';
-import { type BuiltinInspector } from '@lobechat/types';
+import {
+  WebOnboardingInspectors,
+  WebOnboardingManifest,
+} from '@lobechat/builtin-tool-web-onboarding/client';
+import type { BuiltinInspector } from '@lobechat/types';
+
+import { CodexInspectors } from './codex';
+import { GithubIdentifier, GithubInspectors } from './github';
+import { LinearIdentifier, LinearInspectors } from './linear';
+import { TwitterIdentifier, TwitterInspectors } from './twitter';
 
 /**
  * Builtin tools inspector registry
@@ -51,10 +80,12 @@ import { type BuiltinInspector } from '@lobechat/types';
  */
 const BuiltinToolInspectors: Record<string, Record<string, BuiltinInspector>> = {
   [AgentBuilderManifest.identifier]: AgentBuilderInspectors as Record<string, BuiltinInspector>,
+  [AgentDocumentsManifest.identifier]: AgentDocumentsInspectors as Record<string, BuiltinInspector>,
   [AgentManagementManifest.identifier]: AgentManagementInspectors as Record<
     string,
     BuiltinInspector
   >,
+  [ClaudeCodeIdentifier]: ClaudeCodeInspectors as Record<string, BuiltinInspector>,
   [CloudSandboxIdentifier]: CloudSandboxInspectors as Record<string, BuiltinInspector>,
   [GroupAgentBuilderManifest.identifier]: GroupAgentBuilderInspectors as Record<
     string,
@@ -64,17 +95,48 @@ const BuiltinToolInspectors: Record<string, Record<string, BuiltinInspector>> = 
     string,
     BuiltinInspector
   >,
-  [GTDManifest.identifier]: GTDInspectors as Record<string, BuiltinInspector>,
   [KnowledgeBaseManifest.identifier]: KnowledgeBaseInspectors as Record<string, BuiltinInspector>,
+  [LobeAgentManifest.identifier]: LobeAgentInspectors as Record<string, BuiltinInspector>,
+  [LobeDeliveryCheckerManifest.identifier]: LobeDeliveryCheckerInspectors as Record<
+    string,
+    BuiltinInspector
+  >,
   [LocalSystemManifest.identifier]: LocalSystemInspectors as Record<string, BuiltinInspector>,
   [MemoryManifest.identifier]: MemoryInspectors as Record<string, BuiltinInspector>,
-  [NotebookManifest.identifier]: NotebookInspectors as Record<string, BuiltinInspector>,
+  [MessageManifest.identifier]: MessageInspectors as Record<string, BuiltinInspector>,
   [PageAgentManifest.identifier]: PageAgentInspectors as Record<string, BuiltinInspector>,
-  [LobeToolsManifest.identifier]: LobeToolsInspectors as Record<string, BuiltinInspector>,
+  [LobeActivatorManifest.identifier]: LobeActivatorInspectors as Record<string, BuiltinInspector>,
+  [selfFeedbackIntentManifest.identifier]: SelfFeedbackIntentInspectors as Record<
+    string,
+    BuiltinInspector
+  >,
   [SkillStoreManifest.identifier]: SkillStoreInspectors as Record<string, BuiltinInspector>,
   [SkillsManifest.identifier]: SkillsInspectors as Record<string, BuiltinInspector>,
+  [TaskManifest.identifier]: TaskInspectors as Record<string, BuiltinInspector>,
   [WebBrowsingManifest.identifier]: WebBrowsingInspectors as Record<string, BuiltinInspector>,
+  [WebOnboardingManifest.identifier]: WebOnboardingInspectors as Record<string, BuiltinInspector>,
+  codex: CodexInspectors,
+  [GithubIdentifier]: GithubInspectors,
+  [LinearIdentifier]: LinearInspectors,
+  [TwitterIdentifier]: TwitterInspectors,
 };
+
+export interface BuiltinInspectorRegistryEntry {
+  apiName: string;
+  identifier: string;
+  inspector: BuiltinInspector;
+}
+
+export const listBuiltinInspectorEntries = (): BuiltinInspectorRegistryEntry[] =>
+  Object.entries(BuiltinToolInspectors).flatMap(([identifier, toolset]) =>
+    Object.entries(toolset)
+      .filter((entry): entry is [string, BuiltinInspector] => !!entry[1])
+      .map(([apiName, inspector]) => ({
+        apiName,
+        identifier,
+        inspector,
+      })),
+  );
 
 /**
  * Get builtin inspector component for a specific API

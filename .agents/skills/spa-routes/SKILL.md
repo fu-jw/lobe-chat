@@ -1,6 +1,7 @@
 ---
 name: spa-routes
-description: SPA route and feature structure. Use when adding or modifying SPA routes in src/routes, defining new route segments, or moving route logic into src/features. Covers how to keep routes thin and how to divide files between routes and features.
+description: 'LobeHub SPA route architecture. Use when editing src/routes, src/features delegation, desktop/mobile/popup router configs, .desktop variants, route segments, redirects, or new pages.'
+user-invocable: false
 ---
 
 # SPA Routes and Features Guide
@@ -12,6 +13,8 @@ SPA structure:
 - **`src/features/`** – Business logic and UI by domain.
 
 This project uses a **roots vs features** split: `src/routes/` only holds page segments; business logic and UI live in `src/features/` by domain.
+
+**Agent constraint — desktop router parity:** Edits to the desktop route tree must update **both** `src/spa/router/desktopRouter.config.tsx` and `src/spa/router/desktopRouter.config.desktop.tsx` in the same change (same paths, nesting, index routes, and segment registration). Updating only one causes drift; the missing tree can fail to register routes and surface as a **blank screen** or broken navigation on the affected build.
 
 ## When to Use This Skill
 
@@ -73,8 +76,42 @@ Each feature should:
    - Layout: `export { default } from '@/features/MyFeature/MyLayout'` or compose a few feature components + `<Outlet />`.
    - Page: import from `@/features/MyFeature` (or a specific subpath) and render; no business logic in the route file.
 
-5. **Register the route**
-   - Add the segment to `src/spa/router/desktopRouter.config.tsx` (or the right router config) with `dynamicElement` / `dynamicLayout` pointing at the new route paths (e.g. `@/routes/(main)/my-feature`).
+5. **Register the route (desktop — two files, always)**
+   - **`desktopRouter.config.tsx`:** Add the segment with `dynamicElement` / `dynamicLayout` pointing at route modules (e.g. `@/routes/(main)/my-feature`).
+   - **`desktopRouter.config.desktop.tsx`:** Mirror the **same** `RouteObject` shape: identical `path` / `index` / parent-child structure. Use the static imports and elements already used in that file (see neighboring routes). Do **not** register in only one of these files.
+   - **Mobile-only flows:** use `mobileRouter.config.tsx` instead (no need to duplicate into the desktop pair unless the route truly exists on both).
+
+---
+
+## 3a. Desktop router pair (`desktopRouter.config` × 2)
+
+| File                               | Role                                                                                                                      |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `desktopRouter.config.tsx`         | Dynamic imports via `dynamicElement` / `dynamicLayout` — code-splitting; used by `entry.web.tsx` and `entry.desktop.tsx`. |
+| `desktopRouter.config.desktop.tsx` | Same route tree with **synchronous** imports — kept for Electron / local parity and predictable bundling.                 |
+
+Anything that changes the tree (new segment, renamed `path`, moved layout, new child route) must be reflected in **both** files in one PR or commit. Remove routes from both when deleting.
+
+---
+
+## 3b. Other `.desktop.{ts,tsx}` variants inside `src/routes/`
+
+The router pair is **not** the only `.desktop` variant pattern in this repo. Some route trees colocate a `<name>.desktop.{ts,tsx}` next to its base `<name>.{ts,tsx}` — Vite's resolver swaps in the `.desktop` file for Electron builds. Same drift risk as the router pair: editing only one side can break Electron silently.
+
+Known variants today:
+
+| Base file (web)                                       | Desktop file (Electron)                                       | Purpose                                                                                                                                    |
+| ----------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/routes/(main)/settings/features/componentMap.ts` | `src/routes/(main)/settings/features/componentMap.desktop.ts` | Settings tab → component map. Web uses dynamic `import()`; desktop uses sync imports. `componentMap.sync.test.ts` enforces identical keys. |
+| `src/routes/(main)/agent/index.tsx`                   | `src/routes/(main)/agent/index.desktop.tsx`                   | Page entry. Desktop variant overrides the web page wholesale (e.g. extra popup guards).                                                    |
+| `src/routes/(main)/group/index.tsx`                   | `src/routes/(main)/group/index.desktop.tsx`                   | Same pattern as agent.                                                                                                                     |
+
+**Rules:**
+
+1. After editing **any** `.ts`/`.tsx` under `src/routes/`, glob the same directory for a `<filename>.desktop.{ts,tsx}` sibling. If one exists, apply the equivalent change there in the same commit.
+2. When adding a new SettingsTab, register it in **both** `componentMap.ts` (with `dynamic(...)`) and `componentMap.desktop.ts` (with a sync `import`). `componentMap.sync.test.ts` will fail the build otherwise.
+3. When adding a new desktop-only page wholesale-override, prefer a single base file with platform-aware code over introducing a new `.desktop.tsx` variant — only add a new variant when the two trees genuinely diverge (different store wiring, different popup guards, etc.).
+4. When deleting, remove **both** files together.
 
 ---
 

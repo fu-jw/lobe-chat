@@ -1,5 +1,4 @@
-import { OFFICIAL_SERVER_URL } from '../constants/urls';
-import { loadSettings } from '../settings';
+import { resolveServerUrl } from '../settings';
 import { loadCredentials, saveCredentials, type StoredCredentials } from './credentials';
 
 const CLIENT_ID = 'lobehub-cli';
@@ -8,19 +7,21 @@ const CLIENT_ID = 'lobehub-cli';
  * Get a valid access token, refreshing if expired.
  * Returns null if no credentials or refresh fails.
  */
-export async function getValidToken(): Promise<{ credentials: StoredCredentials } | null> {
+export async function getValidToken(
+  bufferSeconds = 60,
+): Promise<{ credentials: StoredCredentials } | null> {
   const credentials = loadCredentials();
   if (!credentials) return null;
 
-  // Check if token is still valid (with 60s buffer)
-  if (credentials.expiresAt && Date.now() / 1000 < credentials.expiresAt - 60) {
+  // Check if token is still valid (with configurable buffer)
+  if (credentials.expiresAt && Date.now() / 1000 < credentials.expiresAt - bufferSeconds) {
     return { credentials };
   }
 
   // Token expired — try refresh
   if (!credentials.refreshToken) return null;
 
-  const serverUrl = loadSettings()?.serverUrl || OFFICIAL_SERVER_URL;
+  const serverUrl = resolveServerUrl();
   const refreshed = await refreshAccessToken(serverUrl, credentials.refreshToken);
   if (!refreshed) return null;
 

@@ -1,3 +1,4 @@
+import dayjs from 'dayjs';
 import { describe, expect, it } from 'vitest';
 
 import { type ChatStore } from '@/store/chat';
@@ -57,6 +58,62 @@ describe('topicSelectors', () => {
       const state = merge(initialStore, { topicDataMap, activeAgentId: 'test' });
       const length = topicSelectors.currentTopicLength(state);
       expect(length).toBe(topicItems.length);
+    });
+  });
+
+  describe('hasMoreTopics', () => {
+    it('should return true when total exceeds pageSize even if hasMore is temporarily false', () => {
+      const state = merge(initialStore, {
+        activeAgentId: 'test',
+        topicDataMap: {
+          [topicMapKey({ agentId: 'test' })]: {
+            currentPage: 0,
+            hasMore: false,
+            items: Array.from({ length: 20 }, (_, index) => ({ id: `topic-${index}` })),
+            pageSize: 20,
+            total: 21,
+          },
+        },
+      });
+
+      expect(topicSelectors.hasMoreTopics(state)).toBe(false);
+      expect(topicSelectors.hasMoreTopicsForSidebar(state)).toBe(true);
+    });
+
+    it('should return false when all topics are already loaded', () => {
+      const state = merge(initialStore, {
+        activeAgentId: 'test',
+        topicDataMap: {
+          [topicMapKey({ agentId: 'test' })]: {
+            currentPage: 1,
+            hasMore: false,
+            items: Array.from({ length: 21 }, (_, index) => ({ id: `topic-${index}` })),
+            pageSize: 20,
+            total: 21,
+          },
+        },
+      });
+
+      expect(topicSelectors.hasMoreTopics(state)).toBe(false);
+      expect(topicSelectors.hasMoreTopicsForSidebar(state)).toBe(true);
+    });
+
+    it('should return false for sidebar when total does not exceed pageSize', () => {
+      const state = merge(initialStore, {
+        activeAgentId: 'test',
+        topicDataMap: {
+          [topicMapKey({ agentId: 'test' })]: {
+            currentPage: 1,
+            hasMore: false,
+            items: Array.from({ length: 21 }, (_, index) => ({ id: `topic-${index}` })),
+            pageSize: 30,
+            total: 21,
+          },
+        },
+      });
+
+      expect(topicSelectors.hasMoreTopics(state)).toBe(false);
+      expect(topicSelectors.hasMoreTopicsForSidebar(state)).toBe(false);
     });
   });
 
@@ -318,6 +375,126 @@ describe('topicSelectors', () => {
       };
 
       expect(topicSelectors.isUndefinedTopics(state)).toBe(true);
+    });
+  });
+
+  describe('groupedTopicsForSidebar', () => {
+    const now = Date.now();
+    const lastYear = dayjs(now).subtract(1, 'year').valueOf();
+
+    const topicsWithDifferentTimes = [
+      {
+        id: 'old-created-new-updated',
+        title: 'Old but active',
+        favorite: false,
+        createdAt: lastYear,
+        updatedAt: now,
+      },
+      {
+        id: 'new-created-new-updated',
+        title: 'New and active',
+        favorite: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ];
+
+    const createStateWithTopics = (topics: any[]) =>
+      merge(initialStore, {
+        topicDataMap: {
+          [topicMapKey({ agentId: 'test' })]: {
+            items: topics,
+            total: topics.length,
+            currentPage: 0,
+            hasMore: false,
+            pageSize: 20,
+          },
+        },
+        activeAgentId: 'test',
+      });
+
+    it('should group by createdAt when sortBy is createdAt', () => {
+      const state = createStateWithTopics(topicsWithDifferentTimes);
+
+      const grouped = topicSelectors.groupedTopicsForSidebar(20, 'createdAt')(state);
+
+      // "Old but active" was created last year, so it should be in a separate group from "New and active"
+      expect(grouped.length).toBeGreaterThanOrEqual(2);
+
+      const groupIds = grouped.map((g) => g.id);
+      // Should have a group for last year
+      expect(groupIds).toContain(dayjs(lastYear).year().toString());
+    });
+
+    it('should group by updatedAt when sortBy is updatedAt', () => {
+      const state = createStateWithTopics(topicsWithDifferentTimes);
+
+      const grouped = topicSelectors.groupedTopicsForSidebar(20, 'updatedAt')(state);
+
+      // Both topics have updatedAt = now, so they should be in the same group
+      expect(grouped).toHaveLength(1);
+      expect(grouped[0].id).toBe('today');
+      expect(grouped[0].children).toHaveLength(2);
+    });
+
+    it('should return empty array when no topics exist', () => {
+      const state = merge(initialStore, { activeAgentId: 'test' });
+
+      const grouped = topicSelectors.groupedTopicsForSidebar(20, 'updatedAt')(state);
+
+      expect(grouped).toEqual([]);
+    });
+
+    it('should respect pageSize limit', () => {
+      const manyTopics = Array.from({ length: 10 }, (_, i) => ({
+        id: `topic-${i}`,
+        title: `Topic ${i}`,
+        favorite: false,
+        createdAt: now - i * 1000,
+        updatedAt: now - i * 1000,
+      }));
+
+      const state = createStateWithTopics(manyTopics);
+
+      const grouped = topicSelectors.groupedTopicsForSidebar(3, 'updatedAt')(state);
+
+      const totalChildren = grouped.reduce((sum, g) => sum + g.children.length, 0);
+      expect(totalChildren).toBe(3);
+    });
+
+    it('should place the pending group right below favorites in byStatus mode', () => {
+      const state = createStateWithTopics([
+        {
+          id: 'fav',
+          title: 'Fav',
+          favorite: true,
+          status: 'active',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'failed',
+          title: 'Failed',
+          favorite: false,
+          status: 'failed',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'active',
+          title: 'Active',
+          favorite: false,
+          status: 'active',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ]);
+
+      const grouped = topicSelectors.groupedTopicsForSidebar(20, 'updatedAt', 'byStatus')(state);
+
+      // favorites stay pinned at the top; pending follows right below, then the rest
+      expect(grouped.map((g) => g.id)).toEqual(['favorite', 'pending', 'active']);
+      expect(grouped[1].children.map((t) => t.id)).toEqual(['failed']);
     });
   });
 });

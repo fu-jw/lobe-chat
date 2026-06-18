@@ -1,14 +1,18 @@
 import { LexicalRenderer } from '@lobehub/editor/renderer';
 import type { SerializedEditorState } from 'lexical';
+import type { CSSProperties } from 'react';
 import { memo, useMemo } from 'react';
 
 import { ActionTagNode } from '@/features/ChatInput/InputEditor/ActionTag/ActionTagNode';
+import { mentionFilledClassName } from '@/features/ChatInput/InputEditor/mentionStyle';
 import { ReferTopicNode } from '@/features/ChatInput/InputEditor/ReferTopic/ReferTopicNode';
 
 interface RichTextMessageProps {
   editorState: unknown;
 }
 
+const LINE_HEIGHT = 1.6;
+const style: CSSProperties = { '--common-line-height': LINE_HEIGHT } as CSSProperties;
 const EXTRA_NODES = [ActionTagNode, ReferTopicNode];
 
 const RichTextMessage = memo<RichTextMessageProps>(({ editorState }) => {
@@ -20,7 +24,15 @@ const RichTextMessage = memo<RichTextMessageProps>(({ editorState }) => {
 
   if (!value) return null;
 
-  return <LexicalRenderer extraNodes={EXTRA_NODES} value={value} variant="chat" />;
+  return (
+    <LexicalRenderer
+      className={mentionFilledClassName}
+      extraNodes={EXTRA_NODES}
+      style={style}
+      value={value}
+      variant="chat"
+    />
+  );
 });
 
 RichTextMessage.displayName = 'RichTextMessage';

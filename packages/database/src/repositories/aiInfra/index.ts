@@ -1,4 +1,5 @@
 import { BRANDING_PROVIDER } from '@lobechat/business-const';
+import { loadModels } from '@lobechat/business-model-bank/model-config';
 import type {
   AiProviderDetailItem,
   AiProviderListItem,
@@ -8,8 +9,7 @@ import type {
 } from '@lobechat/types';
 import { isEmpty } from 'es-toolkit/compat';
 import type { AIChatModelCard, AiProviderModelListItem, EnabledAiModel } from 'model-bank';
-import { AiModelSourceEnum } from 'model-bank';
-import * as modelBank from 'model-bank';
+import { AiModelSourceEnum, isAiModelVisible } from 'model-bank';
 import { DEFAULT_MODEL_PROVIDER_LIST } from 'model-bank/modelProviders';
 import pMap from 'p-map';
 
@@ -127,6 +127,7 @@ export class AiInfraRepos {
   aiProviderModel: AiProviderModel;
   private readonly providerConfigs: Record<string, ProviderConfig>;
   aiModelModel: AiModelModel;
+  private modelBankModelsPromise?: ReturnType<typeof loadModels>;
 
   constructor(
     db: LobeChatDatabase,
@@ -207,11 +208,11 @@ export class AiInfraRepos {
 
             // User hasn't modified local model
             if (!user)
-              return {
+              return injectSearchSettings(provider.id, {
                 ...item,
                 abilities: item.abilities || {},
                 providerId: provider.id,
-              };
+              });
 
             const mergedModel = {
               ...item,
@@ -228,7 +229,7 @@ export class AiInfraRepos {
               settings: isEmpty(user.settings)
                 ? item.settings
                 : merge(item.settings || {}, user.settings || {}),
-              sort: user.sort || undefined,
+              sort: user.sort ?? undefined,
               type: user.type || item.type,
             };
             return injectSearchSettings(provider.id, mergedModel); // User modified local model, check search settings
@@ -238,18 +239,22 @@ export class AiInfraRepos {
       { concurrency: 10 },
     );
 
+    const builtinModels = builtinModelList.flat();
+    const builtinModelKeys = new Set(builtinModels.map((item) => `${item.providerId}:${item.id}`));
+
     const enabledProviderIds = new Set(enabledProviders.map((item) => item.id));
     // User database models, check search settings
-    // Exclude DB residual models for branding provider since they are already handled in builtinModelList
+    // Exclude models already handled in builtinModelList to avoid duplicates
     const appendedUserModels = allModels
       .filter((item) => {
         if (item.providerId === BRANDING_PROVIDER) return false;
+        if (builtinModelKeys.has(`${item.providerId}:${item.id}`)) return false;
         return filterEnabled ? enabledProviderIds.has(item.providerId) && item.enabled : true;
       })
       .map((item) => injectSearchSettings(item.providerId, item));
 
-    return [...builtinModelList.flat(), ...appendedUserModels].sort(
-      (a, b) => (a?.sort || -1) - (b?.sort || -1),
+    return [...builtinModels, ...appendedUserModels].sort(
+      (a, b) => (a?.sort ?? Infinity) - (b?.sort ?? Infinity),
     ) as EnabledAiModel[];
   };
 
@@ -404,11 +409,23 @@ export class AiInfraRepos {
     // Not modifying search settings here doesn't affect usage, but done for data consistency on get
     let mergedModel = mergeArrayById(defaultModels, aiModels) as AiProviderModelListItem[];
 
+    // Model type (chat/video/image/embedding/tts/stt) should always come from builtin config,
+    // because remote-fetched models from provider API (e.g. OpenAI /v1/models) don't return
+    // a type field, causing them to fallback to 'chat' and get saved to DB with wrong type.
+    // e.g. sora-2 is a video model but gets stored as 'chat' after "Fetch models".
+    const builtinTypeMap = new Map(defaultModels.map((m) => [m.id, m.type]));
+    for (const m of mergedModel) {
+      const builtinType = builtinTypeMap.get(m.id);
+      if (builtinType) m.type = builtinType;
+    }
+
     // Filter out DB residual models that are no longer in the builtin list for branding provider
     if (providerId === BRANDING_PROVIDER) {
       const builtinIds = new Set(defaultModels.map((m) => m.id));
       mergedModel = mergedModel.filter((m) => builtinIds.has(m.id));
     }
+
+    mergedModel = mergedModel.filter(isAiModelVisible);
 
     let list = mergedModel.map((m) =>
       injectSearchSettings(providerId, m),
@@ -444,17 +461,20 @@ export class AiInfraRepos {
   /**
    * Fetch builtin models from config
    */
+  private getModelBankModels = () => {
+    this.modelBankModelsPromise ??= loadModels();
+    return this.modelBankModelsPromise;
+  };
+
   private fetchBuiltinModels = async (
     providerId: string,
   ): Promise<AiProviderModelListItem[] | undefined> => {
     try {
-      // TODO: when model-bank is a separate module, we will try import from model-bank/[prividerId] again
-      // @ts-expect-error providerId is string
-      const providerModels = modelBank[providerId];
-
       // use the serverModelLists as the defined server model list
       // fallback to empty array for custom provider
-      const presetList = this.providerConfigs[providerId]?.serverModelLists || providerModels || [];
+      const presetList =
+        this.providerConfigs[providerId]?.serverModelLists ||
+        (await this.getModelBankModels()).filter((model) => model.providerId === providerId);
 
       return (presetList as AIChatModelCard[]).map<AiProviderModelListItem>((m) => ({
         ...m,

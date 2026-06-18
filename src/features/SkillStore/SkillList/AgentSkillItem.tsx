@@ -1,12 +1,15 @@
 'use client';
 
-import { ActionIcon, Avatar, Block, DropdownMenu, Flexbox, Icon, Modal, Tag } from '@lobehub/ui';
-import { App } from 'antd';
+import { ActionIcon, Block, DropdownMenu, Flexbox, Icon, Modal, Tag } from '@lobehub/ui';
+import { confirmModal } from '@lobehub/ui/base-ui';
+import { SkillsIcon } from '@lobehub/ui/icons';
 import { createStaticStyles, cssVar } from 'antd-style';
-import { DownloadIcon, MoreVerticalIcon, PackageSearch, PuzzleIcon, Trash2 } from 'lucide-react';
+import { DownloadIcon, MoreVerticalIcon, PackageSearch, Trash2 } from 'lucide-react';
 import { lazy, memo, Suspense, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import SkillAvatar from '@/components/SkillAvatar';
+import { usePermission } from '@/hooks/usePermission';
 import { agentSkillService } from '@/services/skill';
 import { useToolStore } from '@/store/tool';
 import { type SkillListItem } from '@/types/index';
@@ -42,10 +45,10 @@ interface AgentSkillItemProps {
 const AgentSkillItem = memo<AgentSkillItemProps>(({ skill }) => {
   const { t } = useTranslation('plugin');
   const { t: tc } = useTranslation('common');
-  const { modal } = App.useApp();
   const [detailOpen, setDetailOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const { allowed: canEdit } = usePermission('edit_own_content');
   const deleteAgentSkill = useToolStore((s) => s.deleteAgentSkill);
 
   const handleDownload = async () => {
@@ -63,14 +66,16 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill }) => {
   };
 
   const handleDelete = () => {
-    modal.confirm({
-      centered: true,
+    if (!canEdit) return;
+    confirmModal({
+      cancelText: tc('cancel'),
+      content: t('store.actions.confirmUninstall'),
       okButtonProps: { danger: true },
+      okText: t('store.actions.uninstall'),
       onOk: async () => {
         await deleteAgentSkill(skill.id);
       },
-      title: t('store.actions.confirmUninstall'),
-      type: 'error',
+      title: t('store.actions.uninstall'),
     });
   };
 
@@ -85,13 +90,13 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill }) => {
           paddingInline={12}
           variant={'outlined'}
         >
-          <Avatar avatar={'🧩'} shape={'square'} size={40} />
+          <SkillAvatar size={40} />
           <Flexbox flex={1} gap={4} style={{ minWidth: 0, overflow: 'hidden' }}>
             <Flexbox horizontal align="center" gap={8}>
               <span className={styles.title} onClick={() => setDetailOpen(true)}>
                 {skill.name}
               </span>
-              <Tag icon={<Icon icon={PuzzleIcon} />} size={'small'} />
+              <Tag icon={<Icon icon={SkillsIcon} />} size={'small'} />
             </Flexbox>
             {skill.description && (
               <span className={itemStyles.description}>{skill.description}</span>
@@ -100,6 +105,7 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill }) => {
           <Flexbox horizontal>
             {skill.source === 'user' && (
               <ActionIcon
+                disabled={!canEdit}
                 icon={PackageSearch}
                 title={t('store.actions.manifest')}
                 onClick={() => setEditOpen(true)}
@@ -122,6 +128,7 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill }) => {
                   : []),
                 {
                   danger: true,
+                  disabled: !canEdit,
                   icon: <Icon icon={Trash2} />,
                   key: 'uninstall',
                   label: t('store.actions.uninstall'),
@@ -129,7 +136,7 @@ const AgentSkillItem = memo<AgentSkillItemProps>(({ skill }) => {
                 },
               ]}
             >
-              <ActionIcon icon={MoreVerticalIcon} loading={loading} />
+              <ActionIcon disabled={!canEdit} icon={MoreVerticalIcon} loading={loading} />
             </DropdownMenu>
           </Flexbox>
         </Block>

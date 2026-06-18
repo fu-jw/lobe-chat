@@ -7,8 +7,7 @@ import {
 import { lambdaClient } from '@/libs/trpc/client';
 import { discoverService } from '@/services/discover';
 import {
-  type AgentForkRequest,
-  type AgentForkResponse,
+  type AgentForkBatchInput,
   type AgentForkSourceResponse,
   type AgentForksResponse,
   type AgentGroupForkRequest,
@@ -35,6 +34,7 @@ export class MarketApiService {
 
   // Create new agent
   async createAgent(agentData: {
+    actAs?: number;
     homepage?: string;
     identifier: string;
     isFeatured?: boolean;
@@ -67,6 +67,7 @@ export class MarketApiService {
 
   // Create agent version
   async createAgentVersion(versionData: {
+    actAs?: number;
     a2aProtocolVersion?: string;
     avatar?: string;
     category?: string;
@@ -119,17 +120,14 @@ export class MarketApiService {
   // ==================== Fork Agent API ====================
 
   /**
-   * Fork an agent
-   * @param sourceIdentifier - Source agent identifier
-   * @param forkData - Fork request parameters
+   * Fork one or more agents in a single batch.
+   *
+   * Best-effort: each item is reported individually with `success` true or
+   * false. A failed item does not abort the rest of the batch.
    */
-  async forkAgent(
-    sourceIdentifier: string,
-    forkData: AgentForkRequest,
-  ): Promise<AgentForkResponse> {
+  async forkAgent(items: AgentForkBatchInput[]) {
     return lambdaClient.market.agent.forkAgent.mutate({
-      sourceIdentifier,
-      ...forkData,
+      items,
     });
   }
 

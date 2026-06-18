@@ -50,66 +50,9 @@ export const responsesAPIModels = new Set([
   'gpt-5.4-mini',
   'gpt-5.4-nano',
   'gpt-5.4-pro',
+  'gpt-5.5',
+  'gpt-5.5-pro',
 ]);
 
-/**
- * Regex patterns for models that support context caching (3.5+)
- */
-export const contextCachingModelPatterns: RegExp[] = [
-  // Claude 4.5 series - Anthropic API
-  /^claude-(opus|sonnet|haiku)-4-5-/,
-  // Claude 4 series - Anthropic API
-  /^claude-(opus|sonnet)-4-/,
-  // Claude 3.7 - Anthropic API
-  /^claude-3-7-sonnet-/,
-  // Claude 3.5 series - Anthropic API
-  /^claude-3-5-(sonnet|haiku)-/,
-  // OpenRouter format (3.5+)
-  /^anthropic\/claude-(opus|sonnet|haiku)-(4\.5|4|3\.7|3\.5)/,
-  /^anthropic\/claude-(4\.5|4|3\.7|3\.5)-(opus|sonnet|haiku)/,
-  // AWS Bedrock format: [region.]anthropic.claude-xxx
-  /anthropic\.claude-(opus|sonnet|haiku)-(4-5|4|3-7|3-5)-/,
-];
-
-export const isContextCachingModel = (model: string): boolean => {
-  return contextCachingModelPatterns.some((pattern) => pattern.test(model));
-};
-
-/**
- * Regex patterns for Claude models that support thinking with tools (3.7+)
- */
-export const thinkingWithToolClaudeModelPatterns: RegExp[] = [
-  // Claude 4.5 series - Anthropic API
-  /^claude-(opus|sonnet|haiku)-4-5-/,
-  // Claude 4 series - Anthropic API
-  /^claude-(opus|sonnet)-4-/,
-  // Claude 3.7 - Anthropic API
-  /^claude-3-7-sonnet-/,
-  // OpenRouter format (3.7+)
-  /^anthropic\/claude-(opus|sonnet|haiku)-(4\.5|4|3\.7)/,
-  /^anthropic\/claude-(4\.5|4|3\.7)-(opus|sonnet|haiku)/,
-  // AWS Bedrock format: [region.]anthropic.claude-xxx
-  /anthropic\.claude-(opus|sonnet|haiku)-(4-5|4|3-7)-/,
-];
-
-export const isThinkingWithToolClaudeModel = (model: string): boolean => {
-  return thinkingWithToolClaudeModelPatterns.some((pattern) => pattern.test(model));
-};
-
-/**
- * Regex patterns for Claude 4+ models that have temperature/top_p parameter conflict
- * (cannot set both temperature and top_p at the same time)
- */
-export const temperatureTopPConflictModelPatterns: RegExp[] = [
-  // Claude 4+ series - Anthropic API (4, 4.1, 4.5)
-  /^claude-(opus|sonnet|haiku)-4/,
-  // OpenRouter format
-  /^anthropic\/claude-(opus|sonnet|haiku)-(4\.5|4\.1|4)/,
-  /^anthropic\/claude-(4\.5|4\.1|4)-(opus|sonnet|haiku)/,
-  // AWS Bedrock format: [region.]anthropic.claude-xxx
-  /anthropic\.claude-(opus|sonnet|haiku)-4/,
-];
-
-export const hasTemperatureTopPConflict = (model: string): boolean => {
-  return temperatureTopPConflictModelPatterns.some((pattern) => pattern.test(model));
-};
+export const isGPT5ProResponsesModel = (model: string): boolean =>
+  /(?:^|\/)gpt-5(?:\.\d+)?-pro(?:-|$)/.test(model);

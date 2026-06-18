@@ -5,8 +5,13 @@ import type { App } from '@/core/App';
 
 import RemoteServerConfigCtr from '../RemoteServerConfigCtr';
 
-const { ipcMainHandleMock } = vi.hoisted(() => ({
+const { ipcMainHandleMock, mockFetch } = vi.hoisted(() => ({
   ipcMainHandleMock: vi.fn(),
+  mockFetch: vi.fn(),
+}));
+
+vi.mock('@/utils/net-fetch', () => ({
+  netFetch: mockFetch,
 }));
 
 // Mock logger
@@ -47,8 +52,14 @@ const mockBrowserManager = {
   broadcastToAllWindows: vi.fn(),
 };
 
+const mockGatewayConnectionSrv = {
+  disconnect: vi.fn().mockResolvedValue({ success: true }),
+};
+
 const mockApp = {
   browserManager: mockBrowserManager,
+  getController: vi.fn(),
+  getService: vi.fn().mockReturnValue(mockGatewayConnectionSrv),
   storeManager: mockStoreManager,
 } as unknown as App;
 
@@ -294,6 +305,13 @@ describe('RemoteServerConfigCtr', () => {
       const accessToken = await controller.getAccessToken();
       expect(accessToken).toBeNull();
     });
+
+    it('should disconnect gateway when tokens are cleared', async () => {
+      await controller.saveTokens('access', 'refresh', 3600);
+      await controller.clearTokens();
+
+      expect(mockGatewayConnectionSrv.disconnect).toHaveBeenCalled();
+    });
   });
 
   describe('getTokenExpiresAt', () => {
@@ -407,13 +425,6 @@ describe('RemoteServerConfigCtr', () => {
   });
 
   describe('refreshAccessToken', () => {
-    let mockFetch: ReturnType<typeof vi.fn>;
-
-    beforeEach(() => {
-      mockFetch = vi.fn();
-      global.fetch = mockFetch;
-    });
-
     it('should return error when remote server is not active', async () => {
       mockStoreManager.get.mockImplementation((key) => {
         if (key === 'dataSyncConfig') {
@@ -524,6 +535,7 @@ describe('RemoteServerConfigCtr', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('Token refresh failed');
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
     it('should handle missing tokens in response', async () => {
@@ -607,7 +619,7 @@ describe('RemoteServerConfigCtr', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
-    it('should handle network errors with retry', async () => {
+    it('should not retry after a network error', async () => {
       const { safeStorage } = await import('electron');
       vi.mocked(safeStorage.isEncryptionAvailable).mockReturnValue(true);
       vi.mocked(safeStorage.decryptString).mockImplementation((buffer: Buffer) =>
@@ -633,9 +645,8 @@ describe('RemoteServerConfigCtr', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('Network error');
-      // With retry mechanism, fetch should be called 4 times (1 initial + 3 retries)
-      expect(mockFetch).toHaveBeenCalledTimes(4);
-    }, 15000);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('afterAppReady', () => {

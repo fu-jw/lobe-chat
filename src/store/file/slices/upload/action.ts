@@ -1,8 +1,10 @@
 import { LOBE_CHAT_CLOUD } from '@lobechat/business-const';
+import { inferImageMimeTypeFromBytes } from '@lobechat/utils';
 import { t } from 'i18next';
 import { sha256 } from 'js-sha256';
 
-import { message, notification } from '@/components/AntdStaticMethods';
+import { handleFileUploadError } from '@/business/client/handleFileUploadError';
+import { message } from '@/components/AntdStaticMethods';
 import { fileService } from '@/services/file';
 import { uploadService } from '@/services/upload';
 import { type StoreSetter } from '@/store/types';
@@ -40,11 +42,13 @@ interface UploadWithProgressParams {
    * Optional source identifier for the file (e.g., 'page-editor', 'image_generation')
    */
   source?: string;
+  uploadId?: string;
 }
 
 interface UploadWithProgressResult {
   dimensions?: {
     height: number;
+    ratio: number;
     width: number;
   };
   filename?: string;
@@ -52,7 +56,22 @@ interface UploadWithProgressResult {
   url: string;
 }
 
+const normalizeUploadedImageFileType = async (
+  file: File,
+  fileArrayBuffer: ArrayBuffer,
+): Promise<File> => {
+  const detectedMimeType = await inferImageMimeTypeFromBytes(fileArrayBuffer);
+
+  if (!detectedMimeType || detectedMimeType === file.type) return file;
+
+  return new File([file], file.name, {
+    lastModified: file.lastModified,
+    type: detectedMimeType,
+  });
+};
+
 type Setter = StoreSetter<FileStore>;
+
 export const createFileUploadSlice = (set: Setter, get: () => FileStore, _api?: unknown) =>
   new FileUploadActionImpl(set, get, _api);
 
@@ -66,20 +85,26 @@ export class FileUploadActionImpl {
   uploadBase64FileWithProgress = async (
     base64: string,
   ): Promise<UploadWithProgressResult | undefined> => {
-    // Extract image dimensions from base64 data
-    const dimensions = await getImageDimensions(base64);
+    try {
+      // Extract image dimensions from base64 data
+      const dimensions = await getImageDimensions(base64);
 
-    const { metadata, fileType, size, hash } = await uploadService.uploadBase64ToS3(base64);
+      const { metadata, fileType, size, hash } = await uploadService.uploadBase64ToS3(base64);
 
-    const res = await fileService.createFile({
-      fileType,
-      hash,
-      metadata,
-      name: metadata.filename,
-      size,
-      url: metadata.path,
-    });
-    return { ...res, dimensions, filename: metadata.filename };
+      const res = await fileService.createFile({
+        fileType,
+        hash,
+        metadata: { ...metadata, ...dimensions },
+        name: metadata.filename,
+        size,
+        url: metadata.path,
+      });
+      return { ...res, dimensions, filename: metadata.filename };
+    } catch (error) {
+      if (handleFileUploadError(error)) return;
+
+      throw error;
+    }
   };
 
   uploadWithProgress = async ({
@@ -89,13 +114,17 @@ export class FileUploadActionImpl {
     skipCheckFileType,
     parentId,
     source,
+    uploadId,
     abortController,
   }: UploadWithProgressParams): Promise<UploadWithProgressResult | undefined> => {
+    const statusId = uploadId ?? file.name;
+
     try {
       const fileArrayBuffer = await file.arrayBuffer();
+      const normalizedFile = await normalizeUploadedImageFileType(file, fileArrayBuffer);
 
       // 1. extract image dimensions if applicable
-      const dimensions = await getImageDimensions(file);
+      const dimensions = await getImageDimensions(normalizedFile);
 
       // 2. check file hash
       const hash = sha256(fileArrayBuffer);
@@ -107,21 +136,21 @@ export class FileUploadActionImpl {
       if (checkStatus.isExist) {
         metadata = checkStatus.metadata as FileMetadata;
         onStatusUpdate?.({
-          id: file.name,
+          id: statusId,
           type: 'updateFile',
           value: { status: 'processing', uploadState: { progress: 100, restTime: 0, speed: 0 } },
         });
       }
       // 3. if file don't exist, need upload files
       else {
-        const { data, success } = await uploadService.uploadFileToS3(file, {
+        const { data, success } = await uploadService.uploadFileToS3(normalizedFile, {
           abortController,
           onNotSupported: () => {
-            onStatusUpdate?.({ id: file.name, type: 'removeFile' });
+            onStatusUpdate?.({ id: statusId, type: 'removeFile' });
             message.info({
               content: t('upload.fileOnlySupportInServerMode', {
                 cloud: LOBE_CHAT_CLOUD,
-                ext: file.name.split('.').pop(),
+                ext: normalizedFile.name.split('.').pop(),
                 ns: 'error',
               }),
               duration: 5,
@@ -129,7 +158,7 @@ export class FileUploadActionImpl {
           },
           onProgress: (status, upload) => {
             onStatusUpdate?.({
-              id: file.name,
+              id: statusId,
               type: 'updateFile',
               value: { status: status === 'success' ? 'processing' : status, uploadState: upload },
             });
@@ -142,9 +171,9 @@ export class FileUploadActionImpl {
       }
 
       // 4. use more powerful file type detector to get file type
-      let fileType = file.type;
+      let fileType = normalizedFile.type;
 
-      if (!file.type) {
+      if (!normalizedFile.type) {
         const { fileTypeFromBuffer } = await import('file-type');
 
         const type = await fileTypeFromBuffer(fileArrayBuffer);
@@ -156,10 +185,10 @@ export class FileUploadActionImpl {
         {
           fileType,
           hash,
-          metadata,
-          name: file.name,
+          metadata: { ...metadata, ...dimensions },
+          name: normalizedFile.name,
           parentId,
-          size: file.size,
+          size: normalizedFile.size,
           source,
           url: metadata.path || checkStatus.url,
         },
@@ -167,7 +196,7 @@ export class FileUploadActionImpl {
       );
 
       onStatusUpdate?.({
-        id: file.name,
+        id: statusId,
         type: 'updateFile',
         value: {
           fileUrl: data.url,
@@ -177,17 +206,16 @@ export class FileUploadActionImpl {
         },
       });
 
-      return { ...data, dimensions, filename: file.name };
+      return { ...data, dimensions, filename: normalizedFile.name };
     } catch (error) {
-      // Handle file storage plan limit error
-      if ((error as any)?.message?.includes('beyond the plan limit')) {
-        onStatusUpdate?.({ id: file.name, type: 'removeFile' });
-        notification.error({
-          description: t('upload.storageLimitExceeded', { ns: 'error' }),
-          message: t('upload.uploadFailed', { ns: 'error' }),
-        });
+      if (
+        handleFileUploadError(error, {
+          onUploadBlocked: () => onStatusUpdate?.({ id: statusId, type: 'removeFile' }),
+        })
+      ) {
         return;
       }
+
       throw error;
     }
   };

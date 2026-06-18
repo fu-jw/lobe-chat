@@ -1,8 +1,8 @@
-import {
-  type GenerateContentConfig,
-  type HttpOptions,
-  type ThinkingConfig,
-  type Tool as GoogleFunctionCallTool,
+import type {
+  GenerateContentConfig,
+  HttpOptions,
+  ThinkingConfig,
+  Tool as GoogleFunctionCallTool,
 } from '@google/genai';
 import { GoogleGenAI } from '@google/genai';
 import debug from 'debug';
@@ -20,12 +20,14 @@ import {
 } from '../../types';
 import { AgentRuntimeErrorType } from '../../types/error';
 import { type CreateImagePayload, type CreateImageResponse } from '../../types/image';
+import { type CreateVideoPayload, type CreateVideoResponse } from '../../types/video';
 import { AgentRuntimeError } from '../../utils/createError';
 import { debugStream } from '../../utils/debugStream';
 import { getModelPricing } from '../../utils/getModelPricing';
 import { parseGoogleErrorMessage } from '../../utils/googleErrorParser';
 import { StreamingResponse } from '../../utils/response';
 import { createGoogleImage } from './createImage';
+import { createGoogleVideo, pollGoogleVideoOperation } from './createVideo';
 import { createGoogleGenerateObject, createGoogleGenerateObjectWithTools } from './generateObject';
 import { resolveGoogleThinkingConfig } from './thinkingResolver';
 
@@ -44,7 +46,40 @@ const modelsWithModalities = new Set([
   'nano-banana-pro-preview',
 ]);
 
-const modelsWithImageSearch = new Set(['gemini-3.1-flash-image-preview']);
+// These models need the explicit image/web searchTypes payload when googleSearch is enabled.
+// Other search-capable models use the plain `{ googleSearch: {} }` shape.
+const modelsWithImageSearchTypes = new Set(['gemini-3.1-flash-image-preview']);
+
+// Image-response chat models are stricter than text-only chat models because the request
+// also asks Gemini to return images via `responseModalities: ['Text', 'Image']`.
+// For example, gemini-2.5-flash-image rejects googleSearch with:
+// "Search as tool is not enabled for this model", while these models accept googleSearch.
+const imageResponseModelsWithGoogleSearch = new Set([
+  'gemini-3-pro-image-preview',
+  'gemini-3.1-flash-image-preview',
+]);
+
+// Gemini 3+ models support combined tools (search + urlContext + functionDeclarations)
+const isGemini3OrAbove = (model?: string): boolean => {
+  if (!model) return false;
+  // Match gemini-X or gemini-X.Y patterns, extract major version
+  const match = /gemini-(\d+)/.exec(model);
+  if (!match) return false;
+  return Number.parseInt(match[1], 10) >= 3;
+};
+
+const normalizeThinkingConfig = (config?: ThinkingConfig): ThinkingConfig | undefined => {
+  if (!config) return undefined;
+
+  const { includeThoughts, thinkingBudget, thinkingLevel } = config;
+
+  // Avoid sending `thinkingConfig: {}` (all fields undefined) which can lead upstream
+  // to treat thinking as disabled and produce no thought parts.
+  if (includeThoughts === undefined && thinkingBudget === undefined && thinkingLevel === undefined)
+    return undefined;
+
+  return config;
+};
 
 const modelsDisableInstuction = new Set([
   'gemini-2.0-flash-exp',
@@ -151,7 +186,7 @@ export class LobeGoogleAI implements LobeRuntimeAI {
         thinkingLevel,
       }) as ThinkingConfig;
 
-      const contents = await buildGoogleMessages(payload.messages);
+      const contents = await buildGoogleMessages(payload.messages, { model });
 
       const controller = new AbortController();
       const originalSignal = options?.signal;
@@ -166,6 +201,7 @@ export class LobeGoogleAI implements LobeRuntimeAI {
         }
       }
 
+      const tools = this.buildGoogleToolsWithSearch(payload.tools, payload);
       const config: GenerateContentConfig = {
         abortSignal: originalSignal,
         imageConfig:
@@ -206,8 +242,14 @@ export class LobeGoogleAI implements LobeRuntimeAI {
         thinkingConfig:
           modelsDisableInstuction.has(model) || model.toLowerCase().includes('learnlm')
             ? undefined
-            : thinkingConfig,
-        tools: this.buildGoogleToolsWithSearch(payload.tools, payload),
+            : normalizeThinkingConfig(thinkingConfig),
+        // https://ai.google.dev/gemini-api/docs/tool-combination
+        // Vertex AI does not support includeServerSideToolInvocations
+        toolConfig:
+          !this.isVertexAi && this.needsServerSideToolInvocations(model, tools)
+            ? { includeServerSideToolInvocations: true }
+            : undefined,
+        tools,
         topP: payload.top_p,
       };
 
@@ -271,6 +313,14 @@ export class LobeGoogleAI implements LobeRuntimeAI {
     return createGoogleImage(this.client, this.provider, payload);
   }
 
+  async createVideo(payload: CreateVideoPayload): Promise<CreateVideoResponse> {
+    return createGoogleVideo(this.client, this.provider, payload);
+  }
+
+  async handlePollVideoStatus(inferenceId: string) {
+    return pollGoogleVideoOperation(this.client, inferenceId, this.provider, this.apiKey!);
+  }
+
   /**
    * Generate structured output using Google Gemini API
    * @see https://ai.google.dev/gemini-api/docs/structured-output
@@ -278,7 +328,7 @@ export class LobeGoogleAI implements LobeRuntimeAI {
    */
   async generateObject(payload: GenerateObjectPayload, options?: GenerateObjectOptions) {
     // Convert OpenAI messages to Google format
-    const contents = await buildGoogleMessages(payload.messages);
+    const contents = await buildGoogleMessages(payload.messages, { model: payload.model });
     const pricing = await getModelPricing(payload.model, this.provider);
 
     // Handle tools-based structured output
@@ -454,30 +504,81 @@ export class LobeGoogleAI implements LobeRuntimeAI {
     };
   }
 
+  /**
+   * Returns true when Gemini 3+ tools array combines built-in tools (googleSearch / urlContext)
+   * with functionDeclarations — the API requires `toolConfig.includeServerSideToolInvocations`
+   * in that case.
+   * @see https://ai.google.dev/gemini-api/docs/tool-combination
+   */
+  private needsServerSideToolInvocations(
+    model: string | undefined,
+    tools: GoogleFunctionCallTool[] | undefined,
+  ): boolean {
+    if (!isGemini3OrAbove(model)) return false;
+
+    const hasBuiltIn = tools?.some((tool) => 'googleSearch' in tool || 'urlContext' in tool);
+    const hasFunctions = tools?.some((tool) => Boolean(tool.functionDeclarations?.length));
+
+    return !!(hasBuiltIn && hasFunctions);
+  }
+
   private buildGoogleToolsWithSearch(
     tools: ChatCompletionTool[] | undefined,
     payload?: ChatStreamPayload,
   ): GoogleFunctionCallTool[] | undefined {
-    const hasToolCalls = payload?.messages?.some((m) => m.tool_calls?.length);
     const hasSearch = payload?.enabledSearch;
     const hasUrlContext = payload?.urlContext;
+    const model = payload?.model ?? '';
+    const isImageResponseModel = modelsWithModalities.has(model);
+    const supportsImageResponseGoogleSearch = imageResponseModelsWithGoogleSearch.has(model);
+
+    // Build GoogleSearch tool config with the model-specific search payload shape.
+    const googleSearchTool =
+      hasSearch && (!isImageResponseModel || supportsImageResponseGoogleSearch)
+        ? {
+            googleSearch: modelsWithImageSearchTypes.has(model)
+              ? { searchTypes: { imageSearch: {}, webSearch: {} } }
+              : {},
+          }
+        : undefined;
+
+    if (isImageResponseModel) {
+      // Keep only the prebuilt googleSearch tool for image-response models that support it.
+      // In `responseModalities: ['Text', 'Image']` requests, Vertex AI rejects
+      // function declarations and urlContext with INVALID_ARGUMENT:
+      // "Only google search tool and maps imagery grounding tool is supported for image response."
+      return googleSearchTool ? [googleSearchTool] : undefined;
+    }
+
+    // Gemini 3+ models support combined tools (search + urlContext + functionDeclarations)
+    if (isGemini3OrAbove(payload?.model)) {
+      const result: GoogleFunctionCallTool[] = [];
+
+      if (hasUrlContext) {
+        result.push({ urlContext: {} });
+      }
+      if (googleSearchTool) {
+        result.push(googleSearchTool);
+      }
+
+      const functionTools = buildGoogleTools(tools);
+      if (functionTools) {
+        result.push(...functionTools);
+      }
+
+      return result.length > 0 ? result : undefined;
+    }
+
+    // For older models, search tools cannot be used with FunctionCall simultaneously.
+    // If tool_calls already exist in conversation, prioritize function declarations
+    // to maintain multi-turn tool-calling sessions.
+    const hasToolCalls = payload?.messages?.some((m) => m.tool_calls?.length);
     const hasFunctionTools = tools && tools.length > 0;
 
-    // If tool_calls already exist, prioritize handling function declarations
     if (hasToolCalls && hasFunctionTools) {
       return buildGoogleTools(tools);
     }
 
-    // Build GoogleSearch tool config with optional image search support
-    const googleSearchTool = hasSearch
-      ? {
-          googleSearch: modelsWithImageSearch.has(payload?.model ?? '')
-            ? { searchTypes: { imageSearch: {}, webSearch: {} } }
-            : {},
-        }
-      : undefined;
-
-    // Build and return search-related tools (search tools cannot be used with FunctionCall simultaneously)
     if (hasUrlContext && hasSearch) {
       return [{ urlContext: {} }, googleSearchTool!];
     }
@@ -488,7 +589,6 @@ export class LobeGoogleAI implements LobeRuntimeAI {
       return [googleSearchTool!];
     }
 
-    // Finally consider function declarations
     return buildGoogleTools(tools);
   }
 }

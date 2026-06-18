@@ -8,11 +8,12 @@ import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 
-import getBusinessMenuItems from '@/business/client/features/User/getBusinessMenuItems';
+import useBusinessMenuItems from '@/business/client/features/User/useBusinessMenuItems';
 import { type MenuProps } from '@/components/Menu';
 import { DEFAULT_DESKTOP_HOTKEY_CONFIG } from '@/const/desktop';
 import { OFFICIAL_URL } from '@/const/url';
 import DataImporter from '@/features/DataImporter';
+import WorkspaceLink from '@/features/Workspace/WorkspaceLink';
 import { useNavLayout } from '@/hooks/useNavLayout';
 import { usePlatform } from '@/hooks/usePlatform';
 import { featureFlagsSelectors, useServerConfigStore } from '@/store/serverConfig';
@@ -54,7 +55,7 @@ export const useMenu = () => {
     authSelectors.isLoginWithAuth(s),
   ]);
   const { userPanel } = useNavLayout();
-  const businessMenuItems = getBusinessMenuItems(isLogin);
+  const businessMenuItems = useBusinessMenuItems(isLogin);
   const { isIOS, isAndroid } = usePlatform();
 
   const downloadUrl = useMemo(() => {
@@ -73,9 +74,9 @@ export const useMenu = () => {
       icon: <Icon icon={Settings2} />,
       key: 'setting',
       label: (
-        <Link to="/settings">
+        <WorkspaceLink to="/settings">
           <NewVersionBadge showBadge={hasNewVersion}>{t('userPanel.setting')}</NewVersionBadge>
-        </Link>
+        </WorkspaceLink>
       ),
     },
     ...(userPanel.showMemory
@@ -138,7 +139,14 @@ export const useMenu = () => {
         ]
       : []),
     ...(!hideDocs ? helps : []),
-  ].filter(Boolean) as MenuProps['items'];
+  ]
+    .filter(Boolean)
+    // Remove consecutive dividers to prevent double divider lines
+    .filter((item, index, arr) => {
+      if (index === 0) return true;
+      const isDivider = (i: any) => i && typeof i === 'object' && i.type === 'divider';
+      return !(isDivider(item) && isDivider(arr[index - 1]));
+    }) as MenuProps['items'];
 
   const logoutItems: MenuProps['items'] = isLoginWithAuth
     ? [

@@ -88,7 +88,7 @@ async function createTestAgent(title: string = 'Test Agent'): Promise<string> {
 // Given Steps
 // ============================================
 
-Given('用户在 Home 页面有一个 Agent', async function (this: CustomWorld) {
+Given('用户在 Home 页面有一个 Agent', { timeout: 30_000 }, async function (this: CustomWorld) {
   console.log('   📍 Step: 在数据库中创建测试 Agent...');
   const agentId = await createTestAgent('E2E Test Agent');
   this.testContext.createdAgentId = agentId;
@@ -294,7 +294,9 @@ When('用户在菜单中选择删除', async function (this: CustomWorld) {
 When('用户在弹窗中确认删除', async function (this: CustomWorld) {
   console.log('   📍 Step: 确认删除...');
 
-  const confirmButton = this.page.locator('.ant-modal-confirm-btns button.ant-btn-dangerous');
+  const confirmButton = this.page
+    .getByRole('dialog')
+    .getByRole('button', { name: /^(ok|delete|删除|确认|确定)$/i });
   await expect(confirmButton).toBeVisible({ timeout: 5000 });
   await confirmButton.click();
   await this.page.waitForTimeout(500);

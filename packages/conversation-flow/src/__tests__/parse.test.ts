@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { parse } from '../parse';
+import type { Message } from '../types/shared';
 import { inputs, outputs } from './fixtures';
 
 function serializeParseResult(result: ReturnType<typeof parse>) {
@@ -38,6 +39,316 @@ describe('parse', () => {
       expect(result.flatList[2].id).toBe('msg-4'); // This is the critical one that might be missing
 
       expect(serializeParseResult(result)).toEqual(outputs.assistantChainWithFollowup);
+    });
+
+    it('should keep assistant tool results scoped when tool call IDs repeat', () => {
+      const result = parse([
+        {
+          content: 'Current request',
+          createdAt: 0,
+          id: 'user-current',
+          role: 'user',
+          updatedAt: 0,
+        },
+        {
+          agentId: 'agent-1',
+          content: 'First step',
+          createdAt: 1,
+          id: 'assistant-current-1',
+          parentId: 'user-current',
+          role: 'assistant',
+          tools: [
+            {
+              apiName: 'command_execution',
+              arguments: '{}',
+              id: 'item_1',
+              identifier: 'codex',
+              result_msg_id: 'tool-current-1',
+              type: 'default',
+            },
+          ],
+          updatedAt: 1,
+        },
+        {
+          content: 'Current tool result',
+          createdAt: 2,
+          id: 'tool-current-1',
+          parentId: 'assistant-current-1',
+          role: 'tool',
+          tool_call_id: 'item_1',
+          updatedAt: 2,
+        },
+        {
+          agentId: 'agent-1',
+          content: 'Second step',
+          createdAt: 3,
+          id: 'assistant-current-2',
+          parentId: 'tool-current-1',
+          role: 'assistant',
+          tools: [
+            {
+              apiName: 'command_execution',
+              arguments: '{}',
+              id: 'item_2',
+              identifier: 'codex',
+              result_msg_id: 'tool-current-2',
+              type: 'default',
+            },
+          ],
+          updatedAt: 3,
+        },
+        {
+          content: 'Second tool result',
+          createdAt: 4,
+          id: 'tool-current-2',
+          parentId: 'assistant-current-2',
+          role: 'tool',
+          tool_call_id: 'item_2',
+          updatedAt: 4,
+        },
+        {
+          agentId: 'agent-1',
+          content: 'Final summary',
+          createdAt: 5,
+          id: 'assistant-current-final',
+          parentId: 'tool-current-2',
+          role: 'assistant',
+          updatedAt: 5,
+        },
+        {
+          content: 'Later request',
+          createdAt: 6,
+          id: 'user-later',
+          role: 'user',
+          updatedAt: 6,
+        },
+        {
+          agentId: 'agent-1',
+          content: 'Another turn reuses Codex item ids',
+          createdAt: 7,
+          id: 'assistant-later',
+          parentId: 'user-later',
+          role: 'assistant',
+          tools: [
+            {
+              apiName: 'command_execution',
+              arguments: '{}',
+              id: 'item_1',
+              identifier: 'codex',
+              result_msg_id: 'tool-later-1',
+              type: 'default',
+            },
+          ],
+          updatedAt: 7,
+        },
+        {
+          content: 'Later tool result',
+          createdAt: 8,
+          id: 'tool-later-1',
+          parentId: 'assistant-later',
+          role: 'tool',
+          tool_call_id: 'item_1',
+          updatedAt: 8,
+        },
+      ]);
+
+      const currentGroup = result.flatList.find((message) => message.id === 'assistant-current-1');
+
+      expect(currentGroup?.role).toBe('assistantGroup');
+      expect((currentGroup as any).children.map((child: any) => child.id)).toEqual([
+        'assistant-current-1',
+        'assistant-current-2',
+        'assistant-current-final',
+      ]);
+      expect((currentGroup as any).children[0].tools[0].result_msg_id).toBe('tool-current-1');
+    });
+
+    it('should keep sibling assistant continuations before later user turns under another tool result', () => {
+      const time = (seconds: number) =>
+        new Date(`2026-01-01T00:00:${String(seconds).padStart(2, '0')}.000Z`).getTime();
+      const messages: Message[] = [
+        { content: 'root', createdAt: time(0), id: 'u0', role: 'user', updatedAt: time(0) },
+        {
+          content: 'assistant with two tools',
+          createdAt: time(1),
+          id: 'a0',
+          parentId: 'u0',
+          role: 'assistant',
+          tools: [
+            {
+              apiName: 'update',
+              arguments: '{}',
+              id: 'tc-later',
+              identifier: 'internal',
+              result_msg_id: 'tool-later',
+              type: 'default',
+            },
+            {
+              apiName: 'read',
+              arguments: '{}',
+              id: 'tc-first',
+              identifier: 'internal',
+              result_msg_id: 'tool-first',
+              type: 'default',
+            },
+          ],
+          updatedAt: time(1),
+        },
+        {
+          content: 'todo updated',
+          createdAt: time(2),
+          id: 'tool-later',
+          parentId: 'a0',
+          role: 'tool',
+          tool_call_id: 'tc-later',
+          updatedAt: time(2),
+        },
+        {
+          content: 'context result',
+          createdAt: time(3),
+          id: 'tool-first',
+          parentId: 'a0',
+          role: 'tool',
+          tool_call_id: 'tc-first',
+          updatedAt: time(3),
+        },
+        {
+          content: 'summary before question',
+          createdAt: time(4),
+          id: 'summary',
+          parentId: 'tool-first',
+          role: 'assistant',
+          updatedAt: time(4),
+        },
+        {
+          content: 'Earlier assistant continuation',
+          createdAt: time(5),
+          id: 'first-question',
+          parentId: 'tool-first',
+          role: 'assistant',
+          updatedAt: time(5),
+        },
+        {
+          content: 'later answer',
+          createdAt: time(6),
+          id: 'later-answer',
+          parentId: 'tool-later',
+          role: 'assistant',
+          updatedAt: time(6),
+        },
+        {
+          content: 'Later user follow-up',
+          createdAt: time(7),
+          id: 'status-user',
+          parentId: 'tool-later',
+          role: 'user',
+          updatedAt: time(7),
+        },
+        {
+          content: '...',
+          createdAt: time(8),
+          id: 'status-assistant',
+          parentId: 'status-user',
+          role: 'assistant',
+          updatedAt: time(8),
+        },
+      ];
+
+      const result = parse(messages);
+      const ids = result.flatList.map((message) => message.id);
+
+      // ROOT CAUSE:
+      //
+      // If one assistantGroup owns multiple tool results, and one tool result has
+      // multiple assistant children while another tool result later receives user
+      // turns, FlatListBuilder currently walks the other tool result first. That
+      // renders later user turns before the earlier assistant continuation.
+      //
+      // We fixed this by preserving the chronological continuation order across
+      // sibling tool-result children instead of deferring the second assistant.
+      expect(ids.indexOf('first-question')).toBeLessThan(ids.indexOf('status-user'));
+    });
+
+    it('should interleave continuations from sibling tool results by child creation time', () => {
+      const time = (seconds: number) =>
+        new Date(`2026-01-01T00:01:${String(seconds).padStart(2, '0')}.000Z`).getTime();
+      const messages: Message[] = [
+        { content: 'root', createdAt: time(0), id: 'u0', role: 'user', updatedAt: time(0) },
+        {
+          content: 'assistant with sibling tools',
+          createdAt: time(1),
+          id: 'a0',
+          parentId: 'u0',
+          role: 'assistant',
+          tools: [
+            {
+              apiName: 'first',
+              arguments: '{}',
+              id: 'tc-a',
+              identifier: 'internal',
+              result_msg_id: 'tool-a',
+              type: 'default',
+            },
+            {
+              apiName: 'second',
+              arguments: '{}',
+              id: 'tc-b',
+              identifier: 'internal',
+              result_msg_id: 'tool-b',
+              type: 'default',
+            },
+          ],
+          updatedAt: time(1),
+        },
+        {
+          content: 'tool a result',
+          createdAt: time(2),
+          id: 'tool-a',
+          parentId: 'a0',
+          role: 'tool',
+          tool_call_id: 'tc-a',
+          updatedAt: time(2),
+        },
+        {
+          content: 'tool b result',
+          createdAt: time(3),
+          id: 'tool-b',
+          parentId: 'a0',
+          role: 'tool',
+          tool_call_id: 'tc-b',
+          updatedAt: time(3),
+        },
+        {
+          content: 'first user continuation',
+          createdAt: time(4),
+          id: 'tool-a-first',
+          parentId: 'tool-a',
+          role: 'user',
+          updatedAt: time(4),
+        },
+        {
+          content: 'middle user continuation',
+          createdAt: time(5),
+          id: 'tool-b-middle',
+          parentId: 'tool-b',
+          role: 'user',
+          updatedAt: time(5),
+        },
+        {
+          content: 'last user continuation',
+          createdAt: time(6),
+          id: 'tool-a-last',
+          parentId: 'tool-a',
+          role: 'user',
+          updatedAt: time(6),
+        },
+      ];
+
+      const result = parse(messages);
+      const ids = result.flatList.map((message) => message.id);
+
+      expect(ids.indexOf('tool-a-first')).toBeLessThan(ids.indexOf('tool-b-middle'));
+      expect(ids.indexOf('tool-b-middle')).toBeLessThan(ids.indexOf('tool-a-last'));
     });
   });
 
@@ -257,7 +568,7 @@ describe('parse', () => {
       expect(result.flatList[3].content).toContain('All 10 tasks completed');
     });
 
-    it('should handle single task (execTask) with tool chain after completion', () => {
+    it('should handle single sub-agent (callSubAgent) with tool chain after completion', () => {
       const result = parse(inputs.tasks.singleTaskWithToolChain);
 
       expect(serializeParseResult(result)).toEqual(outputs.tasks.singleTaskWithToolChain);
@@ -283,6 +594,257 @@ describe('parse', () => {
       expect(lastGroup.children[0].tools).toBeDefined();
       expect(lastGroup.children[0].tools[0].result_msg_id).toBe('msg-tool-list-files');
       expect(lastGroup.children[1].id).toBe('msg-assistant-final');
+    });
+  });
+
+  describe('Compression', () => {
+    it('should keep follow-up chain visible after compressedGroup from recursive tool result', () => {
+      // Data provenance:
+      // - The compressedGroup + nested assistant/tool structure is abstracted from the
+      //   real `lh eval message list` output after we fixed the CLI/router to expose
+      //   full compression data.
+      // - That output models the async eval path: long-running search/tool chains that
+      //   later get compressed by the backend before follow-up steps continue.
+      // - We intentionally keep the sample minimal while preserving the real eval traits:
+      //   compressed history, assistant/tool chaining, and tool result message redirection.
+      const messages = [
+        {
+          compressedMessages: [
+            {
+              content:
+                'I was reviewing the list of winners of a prestigious international prize...',
+              id: 'msg-user-hidden',
+              role: 'user',
+            },
+            {
+              content: '',
+              id: 'msg-assistant-hidden',
+              role: 'assistantGroup',
+              tools: [
+                {
+                  id: 'tool-call-1',
+                  result_msg_id: 'msg-tool-hidden',
+                },
+              ],
+            },
+          ],
+          content: 'Compressed summary of earlier search steps',
+          createdAt: 1000,
+          id: 'comp-group-1',
+          pinnedMessages: [],
+          role: 'compressedGroup',
+          updatedAt: 1000,
+        },
+        {
+          content: 'John Clarke was born in the United Kingdom, not the USA.',
+          createdAt: 2000,
+          id: 'msg-follow-up-1',
+          parentId: 'msg-tool-hidden',
+          role: 'assistant',
+          updatedAt: 2000,
+        },
+        {
+          content: '',
+          createdAt: 3000,
+          id: 'msg-follow-up-2',
+          parentId: 'msg-follow-up-1',
+          role: 'assistant',
+          tools: [
+            {
+              apiName: 'search',
+              arguments: '{}',
+              id: 'tool-call-2',
+              identifier: 'lobe-web-browsing',
+              type: 'builtin',
+            },
+          ],
+          updatedAt: 3000,
+        },
+        {
+          content: '<searchResults><item title="MIT Nobel Prize winners" /></searchResults>',
+          createdAt: 4000,
+          id: 'msg-tool-2',
+          parentId: 'msg-follow-up-2',
+          role: 'tool',
+          tool_call_id: 'tool-call-2',
+          updatedAt: 4000,
+        },
+      ] as any[];
+
+      const result = parse(messages);
+
+      expect(result.flatList).toHaveLength(3);
+      expect(result.flatList[0].id).toBe('comp-group-1');
+      expect(result.flatList[0].role).toBe('compressedGroup');
+      expect(result.flatList[1].id).toBe('msg-follow-up-1');
+      expect(result.flatList[2].role).toBe('assistantGroup');
+      expect((result.flatList[2] as any).children).toHaveLength(1);
+      expect((result.flatList[2] as any).children[0].id).toBe('msg-follow-up-2');
+      expect((result.flatList[2] as any).children[0].tools[0].result_msg_id).toBe('msg-tool-2');
+
+      expect(result.contextTree.map((node) => node.id)).toEqual([
+        'comp-group-1',
+        'msg-follow-up-1',
+        'msg-follow-up-2',
+      ]);
+      expect(result.messageMap['msg-follow-up-2']).toBeDefined();
+    });
+
+    it('should keep orphan follow-up chain as root when compressed parent is missing', () => {
+      // Data provenance:
+      // - This case is derived from the current frontend chat continuation behavior:
+      //   after compression, a follow-up request may be queried without the original
+      //   compressed parent message still being present in the current message slice.
+      // - It represents the synchronous chat path, where UI queries a partial window and
+      //   still needs the remaining visible chain instead of dropping it as an orphan.
+      const messages = [
+        {
+          content: 'Continue the Nobel Prize search',
+          createdAt: 1000,
+          id: 'msg-follow-up-1',
+          parentId: 'msg-compressed-hidden',
+          role: 'user',
+          updatedAt: 1000,
+        },
+        {
+          content: 'I will check the laureates by institution.',
+          createdAt: 2000,
+          id: 'msg-follow-up-2',
+          parentId: 'msg-follow-up-1',
+          role: 'assistant',
+          updatedAt: 2000,
+        },
+      ] as any[];
+
+      const result = parse(messages);
+
+      expect(result.flatList).toHaveLength(2);
+      expect(result.flatList[0].id).toBe('msg-follow-up-1');
+      expect(result.flatList[1].id).toBe('msg-follow-up-2');
+      expect(result.contextTree.map((node) => node.id)).toEqual([
+        'msg-follow-up-1',
+        'msg-follow-up-2',
+      ]);
+      expect(result.messageMap['msg-follow-up-1'].parentId).toBe('msg-compressed-hidden');
+    });
+  });
+
+  describe('Usage promotion', () => {
+    it('should promote metadata.usage onto the top-level usage field', () => {
+      // UIChatMessage consumers (Extras token badge, tokenCounter) read from
+      // the top-level `usage` field, but executors only write to
+      // `metadata.usage`. `parse` is the single renderer-side transform that
+      // every read flows through, so it owns the promotion.
+      const usage = {
+        inputCacheMissTokens: 6,
+        inputCachedTokens: 16204,
+        inputWriteCacheTokens: 13964,
+        totalInputTokens: 30174,
+        totalOutputTokens: 265,
+        totalTokens: 30439,
+      };
+      const input = [
+        {
+          id: 'u1',
+          role: 'user' as const,
+          content: 'hi',
+          createdAt: 1,
+        },
+        {
+          id: 'a1',
+          role: 'assistant' as const,
+          content: 'hello',
+          parentId: 'u1',
+          metadata: { usage },
+          createdAt: 2,
+        },
+      ];
+
+      const result = parse(input as any[]);
+      const assistant = result.flatList.find((m) => m.id === 'a1');
+      expect(assistant?.usage).toEqual(usage);
+    });
+
+    it('should not overwrite an existing top-level usage', () => {
+      // If a message already carries a top-level `usage` (e.g. aggregated
+      // group-level total), we keep it — `metadata.usage` is only a fallback.
+      const topLevelUsage = { totalTokens: 999, totalInputTokens: 900, totalOutputTokens: 99 };
+      const metaUsage = { totalTokens: 1, totalInputTokens: 1, totalOutputTokens: 0 };
+      const input = [
+        {
+          id: 'a1',
+          role: 'assistant' as const,
+          content: 'hi',
+          createdAt: 1,
+          usage: topLevelUsage,
+          metadata: { usage: metaUsage },
+        },
+      ];
+
+      const result = parse(input as any[]);
+      expect(result.flatList[0]?.usage).toEqual(topLevelUsage);
+    });
+
+    it('should aggregate per-step nested metadata.usage across an assistantGroup chain', () => {
+      // Hetero-agent (Claude Code) writes per-turn usage to `metadata.usage` on
+      // each step assistant message. The assistantGroup virtual message must
+      // sum them — without this, the UI shows only one step's tokens (typically
+      // the last step, which gets surfaced via the lone metadata.usage that
+      // survived Object.assign collapse).
+      const step1Usage = {
+        inputCachedTokens: 100,
+        totalInputTokens: 200,
+        totalOutputTokens: 50,
+        totalTokens: 250,
+      };
+      const step2Usage = {
+        inputCachedTokens: 300,
+        totalInputTokens: 400,
+        totalOutputTokens: 80,
+        totalTokens: 480,
+      };
+      const input = [
+        {
+          id: 'u1',
+          role: 'user' as const,
+          content: 'q',
+          createdAt: 1,
+        },
+        {
+          id: 'a1',
+          role: 'assistant' as const,
+          content: '',
+          parentId: 'u1',
+          tools: [{ id: 'call-1', type: 'default', apiName: 'bash', arguments: '{}' }],
+          metadata: { usage: step1Usage },
+          createdAt: 2,
+        },
+        {
+          id: 't1',
+          role: 'tool' as const,
+          content: 'tool output',
+          parentId: 'a1',
+          tool_call_id: 'call-1',
+          createdAt: 3,
+        },
+        {
+          id: 'a2',
+          role: 'assistant' as const,
+          content: 'final answer',
+          parentId: 't1',
+          metadata: { usage: step2Usage },
+          createdAt: 4,
+        },
+      ];
+
+      const result = parse(input as any[]);
+      const group = result.flatList.find((m) => m.role === 'assistantGroup');
+      expect(group?.usage).toEqual({
+        inputCachedTokens: 400,
+        totalInputTokens: 600,
+        totalOutputTokens: 130,
+        totalTokens: 730,
+      });
     });
   });
 

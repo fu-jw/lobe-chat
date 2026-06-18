@@ -16,6 +16,7 @@ import {
 } from '../../schemas';
 import { type LobeChatDatabase } from '../../type';
 import { sanitizeBm25Query } from '../../utils/bm25';
+import { buildWorkspaceWhere } from '../../utils/workspace';
 
 // Re-export types for backward compatibility
 export type {
@@ -30,11 +31,17 @@ export type {
  */
 export class HomeRepository {
   private userId: string;
+  private workspaceId?: string;
   private db: LobeChatDatabase;
 
-  constructor(db: LobeChatDatabase, userId: string) {
+  constructor(db: LobeChatDatabase, userId: string, workspaceId?: string) {
     this.userId = userId;
+    this.workspaceId = workspaceId;
     this.db = db;
+  }
+
+  private get scope() {
+    return { userId: this.userId, workspaceId: this.workspaceId };
   }
 
   /**
@@ -44,6 +51,7 @@ export class HomeRepository {
     // 1. Query all agents (non-virtual) with their session info (if exists)
     const agentList = await this.db
       .select({
+        agencyConfig: agents.agencyConfig,
         agentSessionGroupId: agents.sessionGroupId,
         avatar: agents.avatar,
         backgroundColor: agents.backgroundColor,
@@ -59,7 +67,7 @@ export class HomeRepository {
       .from(agents)
       .leftJoin(agentsToSessions, eq(agents.id, agentsToSessions.agentId))
       .leftJoin(sessions, eq(agentsToSessions.sessionId, sessions.id))
-      .where(and(eq(agents.userId, this.userId), not(eq(agents.virtual, true))))
+      .where(and(buildWorkspaceWhere(this.scope, agents), not(eq(agents.virtual, true))))
       .orderBy(desc(agents.updatedAt));
 
     // 2. Query all chatGroups (group chats)
@@ -75,7 +83,7 @@ export class HomeRepository {
         updatedAt: chatGroups.updatedAt,
       })
       .from(chatGroups)
-      .where(eq(chatGroups.userId, this.userId))
+      .where(buildWorkspaceWhere(this.scope, chatGroups))
       .orderBy(desc(chatGroups.updatedAt));
 
     // 2.1 Query member avatars for each chat group
@@ -89,7 +97,7 @@ export class HomeRepository {
         sort: sessionGroups.sort,
       })
       .from(sessionGroups)
-      .where(eq(sessionGroups.userId, this.userId))
+      .where(buildWorkspaceWhere(this.scope, sessionGroups))
       .orderBy(sessionGroups.sort);
 
     // 4. Process and categorize
@@ -98,6 +106,7 @@ export class HomeRepository {
 
   private processAgentList(
     agentItems: Array<{
+      agencyConfig: { heterogeneousProvider?: { type?: string } } | null;
       agentSessionGroupId: string | null;
       avatar: string | null;
       backgroundColor: string | null;
@@ -136,6 +145,7 @@ export class HomeRepository {
         backgroundColor: a.backgroundColor,
         description: a.description,
         groupId: a.agentSessionGroupId ?? a.sessionGroupId,
+        heterogeneousType: a.agencyConfig?.heterogeneousProvider?.type ?? null,
         id: a.id,
         pinned: a.pinned ?? a.sessionPinned ?? false,
         sessionId: a.sessionId,
@@ -222,7 +232,7 @@ export class HomeRepository {
         .leftJoin(sessions, eq(agentsToSessions.sessionId, sessions.id))
         .where(
           and(
-            eq(agents.userId, this.userId),
+            buildWorkspaceWhere(this.scope, agents),
             not(eq(agents.virtual, true)),
             sql`(${agents.title} @@@ ${bm25Query} OR ${agents.description} @@@ ${bm25Query})`,
           ),
@@ -242,7 +252,7 @@ export class HomeRepository {
         .from(chatGroups)
         .where(
           and(
-            eq(chatGroups.userId, this.userId),
+            buildWorkspaceWhere(this.scope, chatGroups),
             sql`(${chatGroups.title} @@@ ${bm25Query} OR ${chatGroups.description} @@@ ${bm25Query})`,
           ),
         )

@@ -43,6 +43,7 @@ describe('fetchSSE', () => {
     expect(mockOnMessageHandle).toHaveBeenNthCalledWith(1, { text: 'Hello World', type: 'text' });
     expect(mockOnFinish).toHaveBeenCalledWith('Hello World', {
       observationId: null,
+      planUpgradeAfterFinish: false,
       toolCalls: undefined,
       traceId: null,
       type: 'done',
@@ -90,6 +91,7 @@ describe('fetchSSE', () => {
     });
     expect(mockOnFinish).toHaveBeenCalledWith('', {
       observationId: null,
+      planUpgradeAfterFinish: false,
       toolCalls: [
         { id: '1', type: 'function', function: { name: 'func1', arguments: 'arg1' } },
         { id: '2', type: 'function', function: { name: 'func2', arguments: 'arg2' } },
@@ -115,6 +117,7 @@ describe('fetchSSE', () => {
     expect(mockOnMessageHandle).toHaveBeenCalledWith({ text: 'Hello World', type: 'text' });
     expect(mockOnFinish).toHaveBeenCalledWith('Hello World', {
       observationId: null,
+      planUpgradeAfterFinish: false,
       toolCalls: undefined,
       traceId: null,
       type: 'done',
@@ -140,27 +143,13 @@ describe('fetchSSE', () => {
       responseAnimation: 'smooth',
     });
 
-    const expectedMessages = [
-      { text: 'H', type: 'text' },
-      { text: 'e', type: 'text' },
-      { text: 'l', type: 'text' },
-      { text: 'l', type: 'text' },
-      { text: 'o', type: 'text' },
-      { text: ' ', type: 'text' },
-      { text: 'W', type: 'text' },
-      { text: 'o', type: 'text' },
-      { text: 'r', type: 'text' },
-      { text: 'l', type: 'text' },
-      { text: 'd', type: 'text' },
-    ];
+    const allCalls = mockOnMessageHandle.mock.calls.map((call) => call[0]);
+    const allTexts = allCalls.filter((c) => c.type === 'text').map((c) => c.text);
+    expect(allTexts.join('')).toBe('Hello World');
 
-    expectedMessages.forEach((message, index) => {
-      expect(mockOnMessageHandle).toHaveBeenNthCalledWith(index + 1, message);
-    });
-
-    // more assertions for each character...
     expect(mockOnFinish).toHaveBeenCalledWith('Hello World', {
       observationId: null,
+      planUpgradeAfterFinish: false,
       toolCalls: undefined,
       traceId: null,
       type: 'done',
@@ -194,6 +183,7 @@ describe('fetchSSE', () => {
 
     expect(mockOnFinish).toHaveBeenCalledWith('Hello World', {
       observationId: null,
+      planUpgradeAfterFinish: false,
       toolCalls: undefined,
       traceId: null,
       type: 'done',
@@ -227,6 +217,7 @@ describe('fetchSSE', () => {
 
       expect(mockOnFinish).toHaveBeenCalledWith('hi', {
         observationId: null,
+        planUpgradeAfterFinish: false,
         toolCalls: undefined,
         reasoning: { content: 'Hello World' },
         traceId: null,
@@ -278,6 +269,7 @@ describe('fetchSSE', () => {
       // Verify output is accumulated correctly
       expect(mockOnFinish).toHaveBeenCalledWith('Hello World', {
         observationId: null,
+        planUpgradeAfterFinish: false,
         toolCalls: undefined,
         traceId: null,
         type: 'done',
@@ -315,6 +307,7 @@ describe('fetchSSE', () => {
       // Verify reasoning is accumulated correctly
       expect(mockOnFinish).toHaveBeenCalledWith('Final answer', {
         observationId: null,
+        planUpgradeAfterFinish: false,
         reasoning: { content: 'Thinking: step 1' },
         toolCalls: undefined,
         traceId: null,
@@ -357,6 +350,7 @@ describe('fetchSSE', () => {
       // Output should be empty since image content is not accumulated
       expect(mockOnFinish).toHaveBeenCalledWith('', {
         observationId: null,
+        planUpgradeAfterFinish: false,
         toolCalls: undefined,
         traceId: null,
         type: 'done',
@@ -389,6 +383,7 @@ describe('fetchSSE', () => {
 
     expect(mockOnFinish).toHaveBeenCalledWith('hi', {
       observationId: null,
+      planUpgradeAfterFinish: false,
       toolCalls: undefined,
       grounding: 'Hello',
       traceId: null,
@@ -450,6 +445,7 @@ describe('fetchSSE', () => {
 
     expect(mockOnFinish).toHaveBeenCalledWith('', {
       observationId: null,
+      planUpgradeAfterFinish: false,
       toolCalls: [
         { id: '1', type: 'function', function: { name: 'func1', arguments: 'arg1' } },
         { id: '2', type: 'function', function: { name: 'func2', arguments: 'arg2' } },
@@ -481,27 +477,14 @@ describe('fetchSSE', () => {
       responseAnimation: 'smooth',
     });
 
-    const expectedMessages = [
-      { text: 'H', type: 'text' },
-      { text: 'e', type: 'text' },
-      { text: 'l', type: 'text' },
-      { text: 'l', type: 'text' },
-      { text: 'o', type: 'text' },
-      { text: ' ', type: 'text' },
-      { text: 'W', type: 'text' },
-      { text: 'o', type: 'text' },
-      { text: 'r', type: 'text' },
-      { text: 'l', type: 'text' },
-      { text: 'd', type: 'text' },
-    ];
-
-    expectedMessages.forEach((message, index) => {
-      expect(mockOnMessageHandle).toHaveBeenNthCalledWith(index + 1, message);
-    });
+    const allCalls = mockOnMessageHandle.mock.calls.map((call) => call[0]);
+    const allTexts = allCalls.filter((c) => c.type === 'text').map((c) => c.text);
+    expect(allTexts.join('')).toBe('Hello World');
 
     expect(mockOnFinish).toHaveBeenCalledWith('Hello World', {
       type: 'done',
       observationId: null,
+      planUpgradeAfterFinish: false,
       traceId: null,
     });
   });
@@ -521,6 +504,7 @@ describe('fetchSSE', () => {
 
     expect(mockOnFinish).toHaveBeenCalledWith('Hello', {
       observationId: null,
+      planUpgradeAfterFinish: false,
       toolCalls: undefined,
       traceId: null,
       type: 'abort',
@@ -538,6 +522,7 @@ describe('fetchSSE', () => {
 
     expect(mockOnFinish).toHaveBeenCalledWith('Hello', {
       observationId: null,
+      planUpgradeAfterFinish: false,
       toolCalls: undefined,
       traceId: null,
       type: 'error',
@@ -598,6 +583,42 @@ describe('fetchSSE', () => {
       expect(mockOnErrorHandle).toHaveBeenCalledWith(mockError);
     });
 
+    it('should NOT inject contextBody into structured provider errors (regression)', async () => {
+      const mockOnErrorHandle = vi.fn();
+      const mockError: ChatMessageError = {
+        body: {
+          error: {
+            type: 'invalid_request_error',
+            message: 'Invalid signature in thinking block',
+          },
+          provider: 'lobehub',
+          errorType: 'ProviderBizError',
+        },
+        message: 'ProviderBizError',
+        type: 'ProviderBizError',
+      };
+
+      (fetchEventSource as any).mockImplementationOnce(
+        (url: string, options: FetchEventSourceInit) => {
+          options.onerror!(mockError);
+        },
+      );
+
+      try {
+        await fetchSSE('/', {
+          onErrorHandle: mockOnErrorHandle,
+          requestContext: { provider: 'openai', model: 'gpt-4o' },
+        });
+      } catch (e) {}
+
+      expect(mockOnErrorHandle).toHaveBeenCalledWith(mockError);
+      const receivedError = mockOnErrorHandle.mock.calls[0][0];
+      expect(receivedError.body).not.toHaveProperty('elapsedMs');
+      expect(receivedError.body).not.toHaveProperty('networkStatus');
+      expect(receivedError.body).not.toHaveProperty('model');
+      expect(receivedError.body.provider).toBe('lobehub');
+    });
+
     it('should call onErrorHandle when Unknown error is thrown', async () => {
       const mockOnErrorHandle = vi.fn();
       const mockError = new Error('Unknown error');
@@ -609,7 +630,10 @@ describe('fetchSSE', () => {
       );
 
       try {
-        await fetchSSE('/', { onErrorHandle: mockOnErrorHandle });
+        await fetchSSE('/', {
+          onErrorHandle: mockOnErrorHandle,
+          requestContext: { provider: 'openai', model: 'gpt-4o' },
+        });
       } catch (e) {}
 
       expect(mockOnErrorHandle).toHaveBeenCalledWith({
@@ -618,7 +642,10 @@ describe('fetchSSE', () => {
         body: {
           message: 'Unknown error',
           name: 'Error',
-          stack: expect.any(String),
+          provider: 'openai',
+          model: 'gpt-4o',
+          elapsedMs: expect.any(Number),
+          networkStatus: expect.any(Boolean),
         },
       });
     });

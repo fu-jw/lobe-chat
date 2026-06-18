@@ -1,6 +1,5 @@
-import { GTDIdentifier } from '@lobechat/builtin-tool-gtd';
+import { LobeActivatorIdentifier } from '@lobechat/builtin-tool-activator';
 import { SkillsIdentifier } from '@lobechat/builtin-tool-skills';
-import { LobeToolIdentifier } from '@lobechat/builtin-tool-tools';
 import {
   type StepActivatedSkill,
   type StepContextTodos,
@@ -156,7 +155,7 @@ const inboxActiveTopicDbMessages = (state: ChatStoreState) => {
 // ============= Activated Tools Selectors ========== //
 
 /**
- * Accumulate activated tool identifiers from all lobe-tools messages.
+ * Accumulate activated tool identifiers from all lobe-activator messages.
  *
  * Unlike todos (which take the latest snapshot), activated tools are
  * cumulative — once a tool is activated it stays active for the rest
@@ -173,7 +172,7 @@ export const selectActivatedToolIdsFromMessages = (
   for (const msg of messages) {
     if (
       msg.role === 'tool' &&
-      msg.plugin?.identifier === LobeToolIdentifier &&
+      msg.plugin?.identifier === LobeActivatorIdentifier &&
       msg.pluginState?.activatedTools
     ) {
       const activatedTools = msg.pluginState.activatedTools as Array<{ identifier?: string }>;
@@ -208,12 +207,16 @@ export const selectActivatedSkillsFromMessages = (
 
   for (const msg of messages) {
     if (
-      msg.role === 'tool' &&
-      msg.plugin?.identifier === SkillsIdentifier &&
-      msg.plugin?.apiName === 'activateSkill' &&
-      msg.pluginState?.id &&
-      msg.pluginState?.name
-    ) {
+      msg.role !== 'tool' ||
+      !(
+        msg.plugin?.identifier === SkillsIdentifier ||
+        msg.plugin?.identifier === LobeActivatorIdentifier
+      )
+    )
+      continue;
+
+    // Direct activateSkill calls — state has top-level id/name
+    if (msg.plugin?.apiName === 'activateSkill' && msg.pluginState?.id && msg.pluginState?.name) {
       const id = msg.pluginState.id as string;
       skillsMap.set(id, {
         description: msg.pluginState.description as string | undefined,
@@ -221,18 +224,43 @@ export const selectActivatedSkillsFromMessages = (
         name: msg.pluginState.name as string,
       });
     }
+
+    // activateTools fallback — skills nested in pluginState.activatedSkills[]
+    if (
+      msg.plugin?.apiName === 'activateTools' &&
+      Array.isArray(msg.pluginState?.activatedSkills)
+    ) {
+      for (const skill of msg.pluginState.activatedSkills as Array<{
+        description?: string;
+        id?: string;
+        name?: string;
+      }>) {
+        if (skill.id && skill.name) {
+          skillsMap.set(skill.id, {
+            description: skill.description,
+            id: skill.id,
+            name: skill.name,
+          });
+        }
+      }
+    }
   }
 
   return skillsMap.size > 0 ? [...skillsMap.values()] : undefined;
 };
 
-// ============= GTD Todos Selectors ========== //
+// ============= Todos Selectors ========== //
 
 /**
  * Select the latest todos state from messages array
  *
- * Searches messages in reverse order to find the most recent GTD tool message
- * that contains todos state.
+ * Searches messages in reverse order to find the most recent tool message
+ * that carries a `pluginState.todos` payload — regardless of which tool
+ * produced it. `pluginState.todos` is treated as a shared contract: lobe-agent
+ * writes it via its client state mutation, and heterogeneous agent adapters
+ * (Claude Code TodoWrite, future ACP/Codex equivalents) synthesize it onto
+ * the tool_result event. Any new producer that honors the shape gets picked
+ * up automatically.
  *
  * This is a pure function that can be used for both:
  * - UI display (showing current todos)
@@ -248,8 +276,7 @@ export const selectTodosFromMessages = (
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
 
-    // Check if this is a GTD tool message with todos state
-    if (msg.role === 'tool' && msg.plugin?.identifier === GTDIdentifier && msg.pluginState?.todos) {
+    if (msg.role === 'tool' && msg.pluginState?.todos) {
       const todos = msg.pluginState.todos as { items?: unknown[]; updatedAt?: string };
 
       // Handle the todos structure: { items: TodoItem[], updatedAt: string }
@@ -271,6 +298,29 @@ export const selectTodosFromMessages = (
   }
 
   return undefined;
+};
+
+/**
+ * Select todos from the current agent turn only — messages after the last
+ * user message. Intended for UI surfaces that should drop a stale/completed
+ * todos snapshot the moment a new user turn begins. If no user message exists
+ * yet (e.g. initial agent greeting), falls back to the full history.
+ *
+ * Do NOT use this for agent runtime step context — the runtime must see todos
+ * across turns so the agent remembers its plan between user messages.
+ */
+export const selectCurrentTurnTodosFromMessages = (
+  messages: UIChatMessage[],
+): StepContextTodos | undefined => {
+  let lastUserIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      lastUserIndex = i;
+      break;
+    }
+  }
+  const scope = lastUserIndex >= 0 ? messages.slice(lastUserIndex + 1) : messages;
+  return selectTodosFromMessages(scope);
 };
 
 /**
@@ -299,5 +349,6 @@ export const dbMessageSelectors = {
   latestUserMessage,
   selectActivatedSkillsFromMessages,
   selectActivatedToolIdsFromMessages,
+  selectCurrentTurnTodosFromMessages,
   selectTodosFromMessages,
 };

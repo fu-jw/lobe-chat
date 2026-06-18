@@ -1,22 +1,39 @@
+import { generateApiKey, isApiKeyExpired, validateApiKeyFormat } from '@lobechat/utils/apiKey';
+import { hashApiKey } from '@lobechat/utils/server';
 import { and, desc, eq } from 'drizzle-orm';
 
 import { KeyVaultsGateKeeper } from '@/server/modules/KeyVaultsEncrypt';
-import { generateApiKey, isApiKeyExpired, validateApiKeyFormat } from '@/utils/apiKey';
-import { hashApiKey } from '@/utils/server/apiKeyHash';
 
 import type { ApiKeyItem, NewApiKeyItem } from '../schemas';
 import { apiKeys } from '../schemas';
 import type { LobeChatDatabase } from '../type';
+import { buildWorkspacePayload, buildWorkspaceWhere } from '../utils/workspace';
 
 export class ApiKeyModel {
+  static findByKey = async (db: LobeChatDatabase, key: string) => {
+    if (!validateApiKeyFormat(key)) {
+      return null;
+    }
+    const keyHash = hashApiKey(key);
+
+    return db.query.apiKeys.findFirst({
+      where: eq(apiKeys.keyHash, keyHash),
+    });
+  };
+
   private userId: string;
   private db: LobeChatDatabase;
+  private workspaceId?: string;
   private gateKeeperPromise: Promise<KeyVaultsGateKeeper> | null = null;
 
-  constructor(db: LobeChatDatabase, userId: string) {
+  constructor(db: LobeChatDatabase, userId: string, workspaceId?: string) {
     this.userId = userId;
     this.db = db;
+    this.workspaceId = workspaceId;
   }
+
+  private ownership = () =>
+    buildWorkspaceWhere({ userId: this.userId, workspaceId: this.workspaceId }, apiKeys);
 
   private async getGateKeeper() {
     if (!this.gateKeeperPromise) {
@@ -34,24 +51,29 @@ export class ApiKeyModel {
 
     const [result] = await this.db
       .insert(apiKeys)
-      .values({ ...params, key: encryptedKey, keyHash, userId: this.userId })
+      .values(
+        buildWorkspacePayload(
+          { userId: this.userId, workspaceId: this.workspaceId },
+          { ...params, key: encryptedKey, keyHash },
+        ),
+      )
       .returning();
 
     return result;
   };
 
   delete = async (id: string) => {
-    return this.db.delete(apiKeys).where(and(eq(apiKeys.id, id), eq(apiKeys.userId, this.userId)));
+    return this.db.delete(apiKeys).where(and(eq(apiKeys.id, id), this.ownership()));
   };
 
   deleteAll = async () => {
-    return this.db.delete(apiKeys).where(eq(apiKeys.userId, this.userId));
+    return this.db.delete(apiKeys).where(this.ownership());
   };
 
   query = async () => {
     const results = await this.db.query.apiKeys.findMany({
       orderBy: [desc(apiKeys.updatedAt)],
-      where: eq(apiKeys.userId, this.userId),
+      where: this.ownership(),
     });
 
     const gateKeeper = await this.getGateKeeper();
@@ -75,14 +97,7 @@ export class ApiKeyModel {
   };
 
   findByKey = async (key: string) => {
-    if (!validateApiKeyFormat(key)) {
-      return null;
-    }
-    const keyHash = hashApiKey(key);
-
-    return this.db.query.apiKeys.findFirst({
-      where: eq(apiKeys.keyHash, keyHash),
-    });
+    return ApiKeyModel.findByKey(this.db, key);
   };
 
   validateKey = async (key: string) => {
@@ -99,12 +114,12 @@ export class ApiKeyModel {
     return this.db
       .update(apiKeys)
       .set({ ...value, updatedAt: new Date() })
-      .where(and(eq(apiKeys.id, id), eq(apiKeys.userId, this.userId)));
+      .where(and(eq(apiKeys.id, id), this.ownership()));
   };
 
   findById = async (id: string) => {
     return this.db.query.apiKeys.findFirst({
-      where: and(eq(apiKeys.id, id), eq(apiKeys.userId, this.userId)),
+      where: and(eq(apiKeys.id, id), this.ownership()),
     });
   };
 
@@ -112,6 +127,6 @@ export class ApiKeyModel {
     return this.db
       .update(apiKeys)
       .set({ lastUsedAt: new Date() })
-      .where(and(eq(apiKeys.id, id), eq(apiKeys.userId, this.userId)));
+      .where(and(eq(apiKeys.id, id), this.ownership()));
   };
 }

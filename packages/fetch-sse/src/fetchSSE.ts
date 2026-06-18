@@ -19,12 +19,15 @@ import { getMessageError } from './parseError';
 
 type SSEFinishType = 'done' | 'error' | 'abort' | string;
 
+const PLAN_UPGRADE_AFTER_FINISH_HEADER = 'x-lobe-plan-upgrade-after-finish';
+
 export type OnFinishHandler = (
   text: string,
   context: {
     grounding?: GroundingSearch;
     images?: ChatImageChunk[];
     observationId?: string | null;
+    planUpgradeAfterFinish?: boolean;
     reasoning?: ModelReasoning;
     speed?: ModelPerformance;
     toolCalls?: MessageToolCall[];
@@ -93,6 +96,13 @@ interface MessageToolCallsChunk {
   type: 'tool_calls';
 }
 
+export interface FetchSSERequestContext {
+  apiMode?: string;
+  fetchOnClient?: boolean;
+  model?: string;
+  provider?: string;
+}
+
 export interface FetchSSEOptions {
   fetcher?: typeof fetch;
   onAbort?: (text: string) => Promise<void>;
@@ -111,6 +121,7 @@ export interface FetchSSEOptions {
       | MessageSpeedChunk
       | MessageStopChunk,
   ) => void;
+  requestContext?: FetchSSERequestContext;
   responseAnimation?: ResponseAnimation;
 }
 
@@ -210,7 +221,15 @@ const createSmoothMessage = (params: {
     outputQueue.push(...text.split(''));
   };
 
+  const flushQueue = () => {
+    if (outputQueue.length === 0) return;
+    const remaining = outputQueue.splice(0).join('');
+    buffer += remaining;
+    params.onTextUpdate(remaining, buffer);
+  };
+
   return {
+    flushQueue,
     isAnimationActive,
     isTokenRemain: () => outputQueue.length > 0,
     pushToQueue,
@@ -235,6 +254,7 @@ export const fetchSSE = async (url: string, options: RequestInit & FetchSSEOptio
 
   let finishedType: SSEFinishType = 'done';
   let response!: Response;
+  const fetchStartTime = Date.now();
 
   const { text, speed: smoothingSpeed } = standardizeAnimationStyle(
     options.responseAnimation ?? {},
@@ -303,6 +323,15 @@ export const fetchSSE = async (url: string, options: RequestInit & FetchSSEOptio
       } else {
         finishedType = 'error';
 
+        const elapsedMs = Date.now() - fetchStartTime;
+        const networkStatus = typeof navigator !== 'undefined' ? navigator.onLine : undefined;
+
+        const contextBody = {
+          ...options.requestContext,
+          elapsedMs,
+          networkStatus,
+        };
+
         options.onErrorHandle?.(
           error.type
             ? error
@@ -310,7 +339,7 @@ export const fetchSSE = async (url: string, options: RequestInit & FetchSSEOptio
                 body: {
                   message: error.message,
                   name: error.name,
-                  stack: error.stack,
+                  ...contextBody,
                 },
                 message: error.message,
                 type: ChatErrorType.UnknownChatFetchError,
@@ -492,6 +521,7 @@ export const fetchSSE = async (url: string, options: RequestInit & FetchSSEOptio
   // so like abort, we don't need to call onFinish
   if (response) {
     textController.stopAnimation();
+    thinkingController.stopAnimation();
 
     // Ensure all buffered data is processed
     if (bufferTimer) {
@@ -513,15 +543,16 @@ export const fetchSSE = async (url: string, options: RequestInit & FetchSSEOptio
 
       const traceId = response.headers.get(LOBE_CHAT_TRACE_ID);
       const observationId = response.headers.get(LOBE_CHAT_OBSERVATION_ID);
+      const planUpgradeAfterFinish = response.headers.get(PLAN_UPGRADE_AFTER_FINISH_HEADER) === '1';
 
-      if (textController.isTokenRemain()) {
-        await textController.startAnimation(smoothingSpeed);
-      }
+      textController.flushQueue();
+      thinkingController.flushQueue();
 
       await options?.onFinish?.(output, {
         grounding,
         images: images.length > 0 ? images : undefined,
         observationId,
+        planUpgradeAfterFinish,
         reasoning: !!thinking ? { content: thinking, signature: thinkingSignature } : undefined,
         speed,
         toolCalls,

@@ -2,6 +2,7 @@ import isEqual from 'fast-deep-equal';
 import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useHasActiveWorkspace } from '@/business/client/hooks/useHasActiveWorkspace';
 import { message } from '@/components/AntdStaticMethods';
 import { useTokenCount } from '@/hooks/useTokenCount';
 import { useMarketAuth } from '@/layout/AuthProvider/MarketAuth';
@@ -39,7 +40,7 @@ export const useMarketPublish = ({ action, onSuccess }: UseMarketPublishOptions)
   const { t } = useTranslation('setting');
   const [isPublishing, setIsPublishing] = useState(false);
   const [isCheckingOwnership, setIsCheckingOwnership] = useState(false);
-  // 使用 ref 来同步跟踪发布状态，避免闭包导致的竞态问题
+  // Use ref to synchronously track publishing state and avoid race conditions caused by closures
   const isPublishingRef = useRef(false);
   const { isAuthenticated } = useMarketAuth();
 
@@ -56,6 +57,7 @@ export const useMarketPublish = ({ action, onSuccess }: UseMarketPublishOptions)
   const model = useAgentStore(agentSelectors.currentAgentModel);
   const provider = useAgentStore(agentSelectors.currentAgentModelProvider);
   const tokenUsage = useTokenCount(systemRole);
+  const hasActiveWorkspace = useHasActiveWorkspace();
 
   const isSubmit = action === 'submit';
 
@@ -95,12 +97,12 @@ export const useMarketPublish = ({ action, onSuccess }: UseMarketPublishOptions)
   }, [meta?.marketIdentifier]);
 
   const publish = useCallback(async () => {
-    // 防止重复发布：使用 ref 同步检查，避免闭包导致的竞态问题
+    // Prevent duplicate publishing: use ref for synchronous check to avoid race conditions from closures
     if (isPublishingRef.current) {
       return { success: false };
     }
 
-    // 检查认证状态 - tRPC 会自动处理 trustedClient
+    // Check authentication state - tRPC handles trustedClient automatically
     if (!isAuthenticated) {
       return { success: false };
     }
@@ -113,13 +115,17 @@ export const useMarketPublish = ({ action, onSuccess }: UseMarketPublishOptions)
     const changelog = generateDefaultChangelog();
 
     try {
-      // 立即设置 ref，防止重复调用
+      // Set ref immediately to prevent duplicate calls
       isPublishingRef.current = true;
       setIsPublishing(true);
       message.loading({ content: loadingMessage, key: messageKey });
+      const actAs = hasActiveWorkspace
+        ? (await lambdaClient.workspace.ensureMarketOrganization.mutate()).marketAccountId
+        : undefined;
 
-      // 使用 tRPC publishOrCreate - 后端会自动处理 ownership 检查
+      // Use tRPC publishOrCreate - backend handles ownership check automatically
       const result = await lambdaClient.market.agent.publishOrCreate.mutate({
+        actAs,
         avatar: meta?.avatar,
         changelog,
         config: {
@@ -150,14 +156,14 @@ export const useMarketPublish = ({ action, onSuccess }: UseMarketPublishOptions)
         },
         description: meta?.description || '',
         editorData,
-        // 传递现有的 identifier，后端会检查 ownership
+        // Pass existing identifier; backend will check ownership
         identifier: meta?.marketIdentifier,
         name: meta?.title || '',
         tags: meta?.tags,
         tokenUsage,
       });
 
-      // 如果是新创建的 agent，需要更新 meta
+      // If a new agent was created, update meta with the new identifier
       if (result.isNewAgent) {
         updateAgentMeta({ marketIdentifier: result.identifier });
       }
@@ -189,6 +195,7 @@ export const useMarketPublish = ({ action, onSuccess }: UseMarketPublishOptions)
     chatConfig?.historyCount,
     chatConfig?.searchMode,
     editorData,
+    hasActiveWorkspace,
     isAuthenticated,
     isSubmit,
     language,

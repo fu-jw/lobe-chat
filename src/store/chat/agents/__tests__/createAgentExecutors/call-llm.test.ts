@@ -1,6 +1,7 @@
 import { type GeneralAgentCallLLMResultPayload } from '@lobechat/agent-runtime';
 import { LOADING_FLAT } from '@lobechat/const';
-import { type MessageToolCall } from '@lobechat/types';
+import type { MessageToolCall } from '@lobechat/types';
+import { ChatErrorType, RequestTrigger } from '@lobechat/types';
 import { describe, expect, it, vi } from 'vitest';
 
 import { chatService } from '@/services/chat';
@@ -61,10 +62,11 @@ vi.mock('@/store/agent/store', () => ({
 const mockStreamResponse = (response: {
   content?: string;
   finishType?: string;
+  planUpgradeAfterFinish?: boolean;
   tool_calls?: MessageToolCall[];
   usage?: any;
 }) => {
-  const { content = '', finishType = 'stop', tool_calls, usage } = response;
+  const { content = '', finishType = 'stop', planUpgradeAfterFinish, tool_calls, usage } = response;
 
   vi.mocked(chatService.createAssistantMessageStream).mockImplementation(async (params: any) => {
     // Simulate text streaming
@@ -84,6 +86,7 @@ const mockStreamResponse = (response: {
     // Simulate finish
     if (params.onFinish) {
       await params.onFinish(content, {
+        planUpgradeAfterFinish,
         toolCalls: tool_calls,
         type: finishType,
         usage,
@@ -169,6 +172,86 @@ describe('call_llm executor', () => {
       );
     });
 
+    it('should append a plan upgrade assistant message after successful campaign finish', async () => {
+      const mockStore = createMockStore();
+      const context = createTestContext({ agentId: 'test-session', topicId: 'test-topic' });
+      const instruction = createCallLLMInstruction({
+        messages: [createUserMessage({ content: 'Hello' })],
+        model: 'claude-fable-5',
+        provider: 'lobehub',
+      });
+      const state = createInitialState();
+
+      mockStreamResponse({ content: 'AI response', planUpgradeAfterFinish: true });
+      mockStore.dbMessagesMap[context.messageKey] = [];
+
+      await executeWithMockContext({
+        executor: 'call_llm',
+        instruction,
+        state,
+        mockStore,
+        context,
+      });
+
+      expect(mockStore.optimisticCreateMessage).toHaveBeenCalledTimes(2);
+      const firstMessage = await vi.mocked(mockStore.optimisticCreateMessage).mock.results[0].value;
+      const planUpgradeMessage = vi
+        .mocked(mockStore.optimisticCreateMessage)
+        .mock.calls.at(-1)?.[0];
+      expect(mockStore.optimisticCreateMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          content: '',
+          error: expect.objectContaining({
+            body: {
+              budget: {
+                modelId: 'claude-fable-5',
+                pricingBasis: 'unknown',
+                providerId: 'lobehub',
+                scenario: 'chat',
+              },
+            },
+            type: ChatErrorType.FreePlanLimit,
+          }),
+          model: 'claude-fable-5',
+          parentId: firstMessage.id,
+          provider: 'lobehub',
+          role: 'assistant',
+          topicId: 'test-topic',
+        }),
+        expect.objectContaining({
+          operationId: expect.any(String),
+        }),
+      );
+      expect(planUpgradeMessage?.error).not.toHaveProperty('message');
+    });
+
+    it('should forward request metadata to chatService', async () => {
+      const mockStore = createMockStore();
+      const context = createTestContext();
+      const instruction = createCallLLMInstruction({
+        messages: [createUserMessage({ content: 'Hello' })],
+      });
+      const state = createInitialState();
+
+      mockStreamResponse({ content: 'AI response' });
+      mockStore.dbMessagesMap[context.messageKey] = [];
+
+      await executeWithMockContext({
+        executor: 'call_llm',
+        instruction,
+        metadata: { trigger: RequestTrigger.Onboarding },
+        state,
+        mockStore,
+        context,
+      });
+
+      expect(chatService.createAssistantMessageStream).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: { trigger: RequestTrigger.Onboarding },
+        }),
+      );
+    });
+
     it('should merge activated tools even when selectedTools are provided', async () => {
       const mockStore = createMockStore();
       const context = createTestContext();
@@ -234,14 +317,14 @@ describe('call_llm executor', () => {
         },
         phase: 'init',
         stepContext: {
-          activatedToolIds: ['lobe-skills', 'lobe-tools'],
+          activatedToolIds: ['lobe-skills', 'lobe-activator'],
         },
       } as any);
 
       expect(toolsEngine.generateToolsDetailed).toHaveBeenCalledWith(
         expect.objectContaining({
           skipDefaultTools: true,
-          toolIds: ['lobe-skills', 'lobe-tools'],
+          toolIds: ['lobe-skills', 'lobe-activator'],
         }),
       );
       expect(chatService.createAssistantMessageStream).toHaveBeenCalledWith(
@@ -1670,6 +1753,167 @@ describe('call_llm executor', () => {
 
       // Then - Second call SHOULD create message
       expect(mockStore.optimisticCreateMessage).toHaveBeenCalled();
+    });
+  });
+
+  describe('Google blocked stream errors', () => {
+    it('should keep normal content and update message error state', async () => {
+      // Given
+      const mockStore = createMockStore();
+      const context = createTestContext();
+      const instruction = createCallLLMInstruction();
+      const state = createInitialState();
+
+      mockStore.dbMessagesMap[context.messageKey] = [];
+
+      vi.mocked(chatService.createAssistantMessageStream).mockImplementation(
+        async (params: any) => {
+          if (params.onMessageHandle) {
+            await params.onMessageHandle({ text: 'Partial output', type: 'text' });
+          }
+
+          if (params.onErrorHandle) {
+            params.onErrorHandle({
+              body: {
+                context: {
+                  finishReason: 'PROHIBITED_CONTENT',
+                },
+                provider: 'google',
+              },
+              message:
+                'Your request may contain prohibited content. Please adjust your request to comply with the usage guidelines.',
+              type: 'ProviderBizError',
+            });
+          }
+
+          if (params.onFinish) {
+            await params.onFinish('Partial output', { type: 'error' });
+          }
+        },
+      );
+
+      // When
+      await executeWithMockContext({
+        executor: 'call_llm',
+        instruction,
+        state,
+        mockStore,
+        context,
+      });
+
+      // Then
+      expect(mockStore.optimisticUpdateMessageError).toHaveBeenCalled();
+
+      const contentCall = vi.mocked(mockStore.optimisticUpdateMessageContent).mock.calls.at(-1);
+      const finalContent = contentCall?.[1] as string;
+
+      expect(finalContent).toBe('Partial output');
+    });
+  });
+
+  describe('Error traceId preservation', () => {
+    it('should preserve backend traceId when local traceId is undefined', async () => {
+      // Given
+      const mockStore = createMockStore();
+      const context = createTestContext();
+      const instruction = createCallLLMInstruction();
+      const state = createInitialState();
+
+      mockStore.dbMessagesMap[context.messageKey] = [];
+
+      const backendTraceId = 'backend-trace-id-123';
+
+      vi.mocked(chatService.createAssistantMessageStream).mockImplementation(
+        async (params: any) => {
+          if (params.onErrorHandle) {
+            params.onErrorHandle({
+              body: {
+                traceId: backendTraceId,
+              },
+              message: 'Provider error',
+              type: 'ProviderBizError',
+            });
+          }
+
+          if (params.onFinish) {
+            await params.onFinish('', { type: 'error' });
+          }
+        },
+      );
+
+      // When
+      await executeWithMockContext({
+        executor: 'call_llm',
+        instruction,
+        state,
+        mockStore,
+        context,
+      });
+
+      // Then
+      expect(mockStore.optimisticUpdateMessageError).toHaveBeenCalled();
+      const errorCall = vi.mocked(mockStore.optimisticUpdateMessageError).mock.calls[0];
+      const errorArg = errorCall[1] as any;
+      expect(errorArg.body.traceId).toBe(backendTraceId);
+    });
+
+    it('should use local traceId when available', async () => {
+      // Given
+      const mockStore = createMockStore();
+      const localTraceId = 'local-trace-id-456';
+      const context = createTestContext();
+      const instruction = createCallLLMInstruction();
+      const state = createInitialState();
+
+      // Set traceId on operation metadata
+      mockStore.operations[context.operationId] = {
+        abortController: new AbortController(),
+        childOperationIds: [],
+        context: {
+          agentId: context.agentId,
+          messageId: context.parentId,
+          topicId: context.topicId,
+        },
+        id: context.operationId,
+        metadata: { startTime: Date.now(), traceId: localTraceId },
+        status: 'running',
+        type: 'execAgentRuntime',
+      };
+
+      mockStore.dbMessagesMap[context.messageKey] = [];
+
+      vi.mocked(chatService.createAssistantMessageStream).mockImplementation(
+        async (params: any) => {
+          if (params.onErrorHandle) {
+            params.onErrorHandle({
+              body: {
+                traceId: 'backend-trace-id',
+              },
+              message: 'Provider error',
+              type: 'ProviderBizError',
+            });
+          }
+
+          if (params.onFinish) {
+            await params.onFinish('', { type: 'error' });
+          }
+        },
+      );
+
+      // When
+      await executeWithMockContext({
+        executor: 'call_llm',
+        instruction,
+        state,
+        mockStore,
+        context,
+      });
+
+      // Then - local traceId should take precedence
+      expect(mockStore.optimisticUpdateMessageError).toHaveBeenCalled();
+      const errorCall = vi.mocked(mockStore.optimisticUpdateMessageError).mock.calls[0];
+      const errorArg = errorCall[1] as any;
+      expect(errorArg.body.traceId).toBe(localTraceId);
     });
   });
 });

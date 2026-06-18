@@ -28,6 +28,7 @@ import ModelDetailPanel from '../ModelDetailPanel';
 interface MultipleProvidersModelItemProps {
   activeKey: string;
   data: ModelWithProviders;
+  defaultProviderId?: string;
   isModelRestricted?: (modelId: string, providerId: string) => boolean;
   newLabel: string;
   onClose: () => void;
@@ -54,6 +55,10 @@ export const MultipleProvidersModelItem = memo<MultipleProvidersModelItemProps>(
 
     const activeProvider = data.providers.find((p) => menuKey(p.id, data.model.id) === activeKey);
     const isActive = !!activeProvider;
+    const defaultProvider = data.providers[0];
+    const defaultProviderRestricted = Boolean(
+      defaultProvider && isModelRestricted?.(data.model.id, defaultProvider.id),
+    );
 
     const allRestricted =
       isModelRestricted &&
@@ -72,13 +77,17 @@ export const MultipleProvidersModelItem = memo<MultipleProvidersModelItemProps>(
           className={cx(menuSharedStyles.item, isActive && styles.menuItemActive)}
           style={{ paddingBlock: 8, paddingInline: 8 }}
           onClick={() => {
-            if (allRestricted) {
+            if (defaultProviderRestricted) {
               onRestrictedModelClick?.();
               onClose();
               return;
             }
+            if (!defaultProvider) {
+              onClose();
+              return;
+            }
             setSubmenuOpen(false);
-            onModelChange(data.model.id, data.providers[0].id);
+            onModelChange(data.model.id, defaultProvider.id);
             onClose();
           }}
         >
@@ -86,26 +95,24 @@ export const MultipleProvidersModelItem = memo<MultipleProvidersModelItemProps>(
             {...data.model}
             {...data.model.abilities}
             newBadgeLabel={newLabel}
-            proBadgeLabel={allRestricted ? proLabel : undefined}
+            proBadgeLabel={defaultProviderRestricted ? proLabel : undefined}
             showInfoTag={showInfoTag}
           />
         </DropdownMenuSubmenuTrigger>
         <DropdownMenuPortal>
           <DropdownMenuPositioner anchor={null} placement="right" sideOffset={12}>
             <DropdownMenuPopup className={cx(styles.detailPopup, styles.dropdownMenu)}>
-              {showInfoTag && (
-                <ModelDetailPanel
-                  model={data.model.id}
-                  provider={(activeProvider ?? data.providers[0]).id}
-                />
-              )}
+              <ModelDetailPanel
+                model={data.model.id}
+                provider={(activeProvider ?? data.providers[0]).id}
+              />
               <DropdownMenuGroup>
                 <DropdownMenuGroupLabel>
                   {t('ModelSwitchPanel.useModelFrom')}
                 </DropdownMenuGroupLabel>
                 {data.providers.map((p) => {
                   const key = menuKey(p.id, data.model.id);
-                  const isProviderActive = activeKey === key;
+                  const isProviderActive = isActive ? activeKey === key : p.id === 'lobehub';
                   const providerRestricted = isModelRestricted?.(data.model.id, p.id);
 
                   return (
