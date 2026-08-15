@@ -6,6 +6,7 @@ import {
 
 import { deviceGateway } from '@/server/services/deviceGateway';
 
+import { resolveRunWorkspaceId } from './resolveWorkspaceScope';
 import { type ServerRuntimeRegistration } from './types';
 
 /**
@@ -48,15 +49,28 @@ export const localSystemRuntime: ServerRuntimeRegistration = {
       throw new Error('activeDeviceId is required for Local System device proxy execution');
     }
 
+    // Resolve the workspace scope the same way `remote-device` does, recovering
+    // it from the running agent when the run-scoped `context.workspaceId` was
+    // lost (see `resolveRunWorkspaceId`). Without this, a workspace device the
+    // model just activated via listOnlineDevices would be addressed under the
+    // personal principal and every filesystem/shell call against it would miss.
+    // Resolved once, shared by every api call in this step.
+    let workspaceIdPromise: Promise<string | undefined> | undefined;
+    const getDeviceWorkspaceId = () => (workspaceIdPromise ??= resolveRunWorkspaceId(context));
+
     const proxy: Record<string, (args: any) => Promise<any>> = {};
 
     for (const api of LocalSystemManifest.api) {
       const workingDirArg = WORKING_DIR_ARG[api.name];
       proxy[api.name] = async (args: any) => {
-        // Inject the device-bound cwd/scope when the model didn't supply one.
-        // `??=` leaves an explicit per-call override possible for the future.
+        // Inject the device-bound cwd/scope when the model didn't supply one
+        // or explicitly passed `.` (a relative reference that resolves to
+        // process.cwd() on the device side — the LobeHub install directory on
+        // packaged desktop instead of the user's actual workspace).
+        const scopeValue: unknown = workingDirArg ? args?.[workingDirArg] : undefined;
+        const needsInjection = scopeValue == null || scopeValue === '.';
         const finalArgs =
-          workingDirArg && context.workingDirectory && args?.[workingDirArg] == null
+          workingDirArg && context.workingDirectory && needsInjection
             ? { ...args, [workingDirArg]: context.workingDirectory }
             : args;
 
@@ -65,6 +79,10 @@ export const localSystemRuntime: ServerRuntimeRegistration = {
             deviceId: context.activeDeviceId!,
             operationId: context.operationId,
             userId: context.userId!,
+            // Workspace devices live under the `workspace:<id>` principal in
+            // the gateway, so the relay needs the workspaceId to address the
+            // right DO pool. Personal device runs resolve to undefined.
+            workspaceId: await getDeviceWorkspaceId(),
           },
           {
             apiName: api.name,

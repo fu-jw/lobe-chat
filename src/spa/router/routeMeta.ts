@@ -1,7 +1,10 @@
-import { type LucideIcon } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import type { ComponentType } from 'react';
 
 export interface StaticRouteMeta {
   icon?: LucideIcon;
+  /** Optional Electron tab label when it should differ from the document title. */
+  tabTitleKey?: string;
   titleKey?: string;
 }
 
@@ -11,8 +14,15 @@ export interface DynamicRouteMeta {
   title?: string;
 }
 
+export type RouteMetaParams = Record<string, string | undefined>;
+
+export interface DynamicRouteMetaProps {
+  onResolve: (meta: DynamicRouteMeta) => void;
+  params: RouteMetaParams;
+}
+
 export interface RouteMeta extends StaticRouteMeta {
-  useDynamicMeta?: (params: Record<string, string | undefined>) => DynamicRouteMeta;
+  DynamicMeta?: ComponentType<DynamicRouteMetaProps>;
 }
 
 export interface RouteHandle {

@@ -108,6 +108,49 @@ export class MessageCollector {
   }
 
   /**
+   * True when a TOOLLESS assistant is the head of a turn that eventually reaches
+   * a tool-using step — the narration the LLM streams in reply to the user
+   * before its first tool call. `collectAssistantChain` already walks correctly
+   * from such a head, but the flat-list dispatcher only opens an AssistantGroup
+   * when the message itself carries tools — so without this check the toolless
+   * head is emitted as its own standalone bubble and visually splits off from the
+   * group that starts at the first tool step (looks like a broken chain).
+   *
+   * Deliberately narrow:
+   * - Only a turn head (parent is a `user` message). A toolless step wedged
+   *   mid-chain (between two tool steps) is bridged by `collectAssistantChain`
+   *   itself so the chain stays in one group — see the toolless-continuation
+   *   branch there; it must NOT also be opened as a head here or the same run
+   *   would split.
+   * - The continuation path must eventually carry tools. Consecutive toolless
+   *   prose steps are still part of the same hetero-agent run, so walk through
+   *   them instead of splitting the visible chain into standalone bubbles.
+   * - A fork (>1 same-agent non-signal continuation) returns false so branch
+   *   handling stays untouched.
+   */
+  isToolChainHead(assistant: Message): boolean {
+    if (assistant.role !== 'assistant') return false;
+    if (assistant.tools && assistant.tools.length > 0) return false;
+
+    const parent = assistant.parentId ? this.messageMap.get(assistant.parentId) : undefined;
+    if (parent?.role !== 'user') return false;
+
+    const groupAgentId = assistant.agentId;
+    const allMessages = [...this.messageMap.values()];
+    const visited = new Set<string>([assistant.id]);
+    let current: Message = assistant;
+
+    while (true) {
+      const next = this.findFlatChainContinuation(current, [], allMessages, visited, groupAgentId);
+      if (!next) return false;
+      if (next.tools && next.tools.length > 0) return true;
+
+      visited.add(next.id);
+      current = next;
+    }
+  }
+
+  /**
    * Recursively collect the entire assistant chain
    * (assistant -> tools -> assistant -> tools -> ...)
    * Only collects messages from the SAME agent (matching agentId)
@@ -156,9 +199,38 @@ export class MessageCollector {
         allToolMessages,
         processedIds,
       );
-    } else {
-      // Final assistant without tools — caller marks the whole chain processed
-      assistantChain.push(continuation);
+      return;
+    }
+
+    // Toolless continuations are still part of the same hetero-agent run. The
+    // model can emit several prose-only progress updates before the next tool
+    // call, so keep walking until the chain either ends in a toolless final
+    // answer or reaches the next tool-using assistant.
+    let toollessContinuation: Message | undefined = continuation;
+    while (
+      toollessContinuation &&
+      (!toollessContinuation.tools || toollessContinuation.tools.length === 0)
+    ) {
+      assistantChain.push(toollessContinuation);
+      processedIds.add(toollessContinuation.id);
+
+      toollessContinuation = this.findFlatChainContinuation(
+        toollessContinuation,
+        [], // a toolless step owns no tool results
+        allMessages,
+        processedIds,
+        groupAgentId,
+      );
+    }
+
+    if (toollessContinuation) {
+      this.collectAssistantChain(
+        toollessContinuation,
+        allMessages,
+        assistantChain,
+        allToolMessages,
+        processedIds,
+      );
     }
   }
 
@@ -210,7 +282,36 @@ export class MessageCollector {
       .sort((a, b) => a.createdAt - b.createdAt);
 
     const activeId = this.resolveActiveContinuationId(candidates);
-    return activeId ? candidates.find((m) => m.id === activeId) : undefined;
+    if (!activeId) return;
+
+    const activeContinuation = candidates.find((message) => message.id === activeId);
+    if (!activeContinuation) return;
+
+    this.markUnselectedContinuationSiblings(activeContinuation, candidates, processedIds);
+    return activeContinuation;
+  }
+
+  /**
+   * Multiple assistant continuations can share a tool-result parent, including
+   * duplicate outputs left by a retried execution. Once BranchResolver selects
+   * the continuation for the current chain, the other same-parent assistants
+   * must be treated as consumed;
+   * otherwise FlatListBuilder's post-group continuation drain emits them later
+   * as standalone messages, often after a much newer turn.
+   */
+  private markUnselectedContinuationSiblings(
+    activeContinuation: Message,
+    candidates: Message[],
+    processedIds: Set<string>,
+  ): void {
+    for (const candidate of candidates) {
+      if (
+        candidate.id !== activeContinuation.id &&
+        candidate.parentId === activeContinuation.parentId
+      ) {
+        processedIds.add(candidate.id);
+      }
+    }
   }
 
   /**
